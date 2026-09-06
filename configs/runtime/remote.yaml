@@ -4,7 +4,10 @@ remote:
   project_root: /root/shopping-agent-rl
   upstream_root: /root/ShopSimulator
   data_root: /root/data/shopsim
+  catalog_path: /root/ShopSimulator/shop_env/data/fine_items_eval_train_all.json.gz
+  manifests_root: /root/data/shopsim/manifests
   models_root: /root/data/models
+  tokenizer_path: /root/data/models/Qwen3-8B-tokenizer
   runs_root: /root/runs/shopsim-rl
   cache_root: /root/.cache/shopsim-rl
   python: /root/miniconda3/bin/python

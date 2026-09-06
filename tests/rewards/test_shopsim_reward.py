@@ -43,13 +43,19 @@ def test_complete_success_and_endpoints():
 
 
 def test_category_mismatch():
-    result = score_episode(product(category="服饰›女鞋›单鞋", title="跑鞋"), goal(), price=80.0, options={"颜色": "白色"}, finished=True)
+    mismatched = product(category="服饰›女鞋›单鞋", title="跑鞋")
+    mismatched["query"] = "鞋"
+    result = score_episode(mismatched, goal(), price=80.0, options={"颜色": "白色"}, finished=True)
     assert result["r_category"] == 0.5
     assert result["r_strict"] < 1.0
 
 
 def test_attribute_mismatch():
-    result = score_episode(product(attrs=["塑料"]), goal(), price=80.0, options={"颜色": "白色"}, finished=True)
+    mismatched = product(attrs=["塑料"])
+    mismatched["Title"] = mismatched["title"] = "塑料收纳盒"
+    mismatched["BulletPoints"] = ["收纳用品"]
+    mismatched["Description"] = "收纳用品"
+    result = score_episode(mismatched, goal(), price=80.0, options={"颜色": "白色"}, finished=True)
     assert result["r_attribute"] < 1.0
     assert result["r_succ"] == 0.0
 

@@ -1,6 +1,6 @@
 # P2 ShopSimulator environment setup
 
-**状态**：搜索基础设施已恢复；真实 environment 仍因 upstream data contract blocker 未完成。
+**状态**：完成。搜索基础设施、Catalog-Fine compatibility 与 CPU smoke 已验证。
 
 ## 缺失与 provenance
 
@@ -43,8 +43,18 @@ cd /root/shopping-agent-rl
 - `shop_agent._handle_reset_action()` 返回 `instruction`、`instruction_simple`、`goal_options`；`reason_key` 只在 persona 结果中转发，可安全保持 `None`。
 - `WebAgentTextEnv`/`SimServer` 的旧 WebShop-compatible path 直接读取 `item['query']`、`item['reason_key']`，persona goal 读取 `product['instruction_sample']`。
 - 当前 raw Catalog-Fine 只有 `instruction_simple`，没有 `instruction_sample`；persona API 的显式投影证明其是 policy-visible short instruction，但不能反推出 `query`。
-- 当前 source 没有 query/instruction_sample preprocessing、conversion 或 runner injection。`load_products()` 先用 `p['query']`，再在 goal/reward 中比较 query；因此 missing query 是真实 runtime contract gap，不是可由现有 deterministic logic 恢复的字段。
+- 当前 source 没有 query/instruction_sample preprocessing、conversion 或 runner injection。`load_products()` 先读取 `p['query']`，再在 goal/reward 中比较 query；项目脚本 `/root/shopping-agent-rl/scripts/apply_shopsim_catalog_compat.py` 以显式 `query_available=False` 处理缺失 query，并让 `query_match=False`。
 
 ## 当前结论
 
-spaCy 已安装并验证为 `core_web_sm 3.8.0`；search/index 已可复现。仍不能启动官方 `WebAgentTextEnv`，因为这样会要求对 `query` 赋予未定义语义。没有修改 upstream、没有使用 `spacy.blank`、没有 gold lookup 替代 search，也没有生成训练数据。
+spaCy 已安装并验证为 `core_web_sm 3.8.0`；search/index 已可复现。compatibility script 幂等运行后，完整 runtime catalog 可构造 Single/Persona goals；使用精简的两个 TRAIN record（完整 index 仍为 23,421 docs）运行 smoke：`python scripts/smoke_shopsim_cpu.py --catalog /root/data/shopsim/smoke-catalog.json --search-root /root/data/shopsim/search_engine --out /root/data/shopsim/smoke.json`。该 smoke 真实经过 search/click/option/Buy Now，未使用 gold lookup 替代 search。另以一个环境实例启动官方 `shop_env/shop_env/pack_api.py` Flask app 的 test client，沿同一 textual action parser 链完成 reset/search/click/option/Buy Now，terminal reward=1.0。没有下载模型、调用 teacher API 或生成训练数据。
+
+## Compatibility patch fingerprints
+
+当前远程 upstream source fingerprint（脚本 `fingerprint_upstream.sh`）：
+`sha256=2c8373d721766f0c1c5c98292bc59bbea2f6bbaef139eb20ac00fb09fd5ef67b`。
+
+- `engine.py`：`bb6fdac2b89143c6c69322bc5f6c4ef5b0f3964ff619a36eb2250f97a833352c`
+- `goal.py`：`70770af2f7318f58d2f5db064c425fdbca8bead78cdb8b64e81f644cefde2045`
+- `utils.py`：`d1412098ec10e37ed5cbe847747094e45b686936bbc038b91ab3046f0fad4631`
+- compatibility script：`9fce02e7f8d57ed495a653a1dcb10dda04a0830ff0e0160c17fdd1e14eb35b85`

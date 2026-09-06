@@ -8,7 +8,7 @@
 - 上游 README 声明的公开仓库：`https://github.com/ShopAgent-Team/ShopSimulator`。
 - 审计时通过 GitHub API 读取到 `main` 的参考 commit：`51bb26012cee31aea7ac26177c5ffe807026ac07`（2026-09-06 查询）；这是远程参考值，不等同于本地 checkout 的已验证 commit。
 - 远程 upstream 路径：`/root/ShopSimulator`；目录内容对应 GitHub main 参考 commit `51bb26012cee31aea7ac26177c5ffe807026ac07`。远程目录没有 upstream `.git` 元数据，因此该 hash 是已审计的上游参考 pin，不等同于本地 checkout 的可验证 Git commit。
-- 当前 remote source fingerprint：`sha256=324238fc96a1849b4181c74b29f762f104f7a7d071d7012a7d1e635259d24928`。生成命令为：`cd /root/ShopSimulator && find . -type f -not -path './shop_env/data/*' -not -path './outputs/*' -not -path './*/outputs/*' -not -path './cache/*' -not -path './*/cache/*' -not -path './__pycache__/*' -not -path './*/__pycache__/*' -not -path './shop_env/search_engine/indexes*/*' -not -path './*/indexes/*' -not -name '*.pyc' -not -path './shop_env/web_agent_site/models/logs/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum`。该 fingerprint 覆盖当前实际依赖的 source/config/templates，排除 data、outputs、cache、`__pycache__`、generated index、临时日志。
+- 当前 remote source fingerprint：`sha256=2c8373d721766f0c1c5c98292bc59bbea2f6bbaef139eb20ac00fb09fd5ef67b`。生成命令为：`cd /root/ShopSimulator && bash /root/shopping-agent-rl/scripts/fingerprint_upstream.sh`。该 fingerprint 覆盖当前实际依赖的 source/config/templates（含已应用的 compatibility patch），排除 data、outputs、cache、`__pycache__`、generated index、临时日志。
 
 ## 相关架构（Single / Single&Pers）
 
@@ -54,8 +54,8 @@
 
 ## 风险与歧义
 
-- 当前 upstream checkout 无 commit 元数据，无法满足可复现实验的 pin 要求。
-- 本地 checkout 缺少 `shop_env/search_engine` index 目录；只有 `shop_env/data/fine_items_eval_train_all.json.gz`，因此服务启动可行性尚未证明。
+- 当前 upstream checkout 无 commit 元数据；项目以 source fingerprint 和已记录的 GitHub reference commit 固定 snapshot。
+- public checkout 缺少 `shop_env/search_engine`；项目按 pinned Princeton WebShop source 恢复外置 index，并已完成 CPU service/API smoke。
 - `get_reward()` 只显式返回 loose 风格总分和部分 detail；论文 strict 公式、`Rfinish` 及统一命名需要 P2 parity tests 确认。
 - 上游 goal 生成使用随机价格上界；正式 manifest / seed 与 upstream 随机性必须在 P2 冻结。
 - `single_eval/env.py` 的 persona 分支会改写返回字典中的 `instruction`；wrapper 必须避免污染 evaluator hidden fields。

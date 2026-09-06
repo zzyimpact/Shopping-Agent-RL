@@ -137,7 +137,7 @@ evaluator_only:
 ## 数据异常与未完成项
 
 1. 论文报告 3,383，而当前 public/upstream snapshot 为 3,323；项目 actual configuration 已正式冻结为 3,323。
-2. 当前 snapshot 没有 `query`、`reason_key`、`instruction_sample` 等 upstream goal 代码会读取的字段；source trace 见 `P2_ENVIRONMENT_SETUP.md`。其中 `reason_key` 可安全为空，`instruction_sample` 有 single_eval 的 persona 投影证据可由 `instruction_simple` 兼容，但 `query` 没有官方 deterministic 生成逻辑，不能自行发明。
-3. 官方 ShopSimulator 从未提交 `search_engine`；已按 pinned Princeton WebShop source 恢复 indexing infrastructure，并成功构建 23,421-doc Catalog-Fine index。真实 environment 仍因 `query` data contract 缺失未启动。
+2. 当前 snapshot 没有 `query`、`reason_key`、`instruction_sample` 等 upstream goal 代码会读取的字段；source trace 见 `P2_ENVIRONMENT_SETUP.md`。项目 compatibility layer 对缺失 query 固定 `query_match=False`，不生成 query；`reason_key` 保持 `None`，persona 使用 upstream `instruction_simple` 投影。
+3. 官方 ShopSimulator 从未提交 `search_engine`；已按 pinned Princeton WebShop source 恢复 indexing infrastructure，并成功构建 23,421-doc Catalog-Fine index。使用两条 TRAIN 示例完成了真实 CPU environment smoke 与 terminal reward parity。
 4. `zh_core_web_sm` 已验证为 `core_web_sm` 3.8.0；tokenizer profiling 已完成；没有加载 Qwen3-8B 权重。
-5. 因 `query` 缺口，本轮没有把 gold-aware smoke trajectory 写入训练数据，也没有宣称 environment/reward end-to-end parity 已通过。
+5. gold-aware smoke 仅写入 `/root/data/shopsim/smoke.json` 作为运行验证 artifact，不进入训练数据或正式 metrics；四条场景/Persona episode 均满足 `query_match=False` 且 wrapper parity 通过。

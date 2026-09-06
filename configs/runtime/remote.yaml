@@ -5,6 +5,7 @@ remote:
   upstream_root: /root/ShopSimulator
   data_root: /root/data/shopsim
   catalog_path: /root/ShopSimulator/shop_env/data/fine_items_eval_train_all.json.gz
+  runtime_catalog_path: /root/data/shopsim/catalog-fine-runtime.json
   manifests_root: /root/data/shopsim/manifests
   models_root: /root/data/models
   tokenizer_path: /root/data/models/Qwen3-8B-tokenizer
@@ -17,6 +18,7 @@ remote:
   service_port: 5000
   runs_root: /root/runs/shopsim-rl
   cache_root: /root/.cache/shopsim-rl
+  compatibility_script: /root/shopping-agent-rl/scripts/apply_shopsim_catalog_compat.py
   python: /root/miniconda3/bin/python
   pip: /root/miniconda3/bin/pip
 

@@ -241,6 +241,8 @@ Dataset profiling 至少包括：
 
 当前 public/upstream snapshot 的 Single&Pers train pool 实际为 3,323；论文报告的 3,383 作为 paper fact 保留，项目使用可复现的 3,323，不自行补齐或重新切分。
 
+当前 Catalog-Fine snapshot 缺少 upstream 读取的 `query`。项目 compatibility layer 不生成 query；缺失时固定 `query_match=False`，并在 P2 reward validation 与正式实验结果中报告这一 public-snapshot deviation，不等待 upstream clarification。
+
 Reward：
 
 - 优先 wrap/reuse upstream scorer；

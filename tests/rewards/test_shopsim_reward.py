@@ -94,3 +94,39 @@ def test_component_and_aggregate_parity_with_upstream():
     assert result["r_attribute"] == detail["r_att"]
     assert result["r_option"] == detail["r_option"]
     assert result["r_price"] == detail["r_price"]
+
+
+def test_missing_query_forces_query_match_false_and_keeps_category_fallback():
+    from web_agent_site.engine.goal import get_type_reward
+
+    purchased = product()
+    target = goal()
+    purchased["query"] = target["query"] = None
+    purchased["query_available"] = target["query_available"] = False
+    detail = get_type_reward(purchased, target)
+    assert detail["query_match"] is False
+    assert detail["category_match"] is True
+    assert detail["r_type"] == 1.0
+
+
+def test_empty_query_trap_never_matches():
+    from web_agent_site.engine.goal import get_type_reward
+
+    purchased = product()
+    target = goal()
+    purchased["query"] = target["query"] = ""
+    detail = get_type_reward(purchased, target)
+    assert detail["query_match"] is False
+
+
+@pytest.mark.parametrize("left,right,expected", [("枕头", "枕头", True), ("枕头", "鞋", False)])
+def test_existing_query_uses_upstream_compatibility_branch(left, right, expected):
+    from web_agent_site.engine.goal import get_type_reward
+
+    purchased = product()
+    target = goal()
+    purchased["query"] = left
+    target["query"] = right
+    purchased["query_available"] = target["query_available"] = True
+    detail = get_type_reward(purchased, target)
+    assert detail["query_match"] is expected

@@ -1468,6 +1468,10 @@ Project：Hugging Face TRL；不安装 ROLL 或 veRL。
 Paper：3,383 personalized train instructions。
 Project：当前 public/upstream snapshot 与 runner 实际暴露 3,323；项目使用可复现的 3,323 条。
 
+### D9 — Public Catalog-Fine query compatibility
+当前 public Catalog-Fine snapshot 不提供 `query`，但公开 environment/reward code 仍读取该字段；仓库中未发现与该 snapshot 对应的 deterministic 生成逻辑。
+Project：当 `query` 不可用时显式固定 `query_match=False`，不从 title、category、instruction 或 search action 推断 query。该兼容语义可能影响 `r_type/Rcategory` 及其下游 loose/strict reward 的边界 case，正式结果必须报告该 deviation；未来数据提供合法 query 时才沿用 upstream query semantics。
+
 所有新增 deviation 必须进入 `experiments/deviations.md`。
 
 ---

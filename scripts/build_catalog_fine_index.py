@@ -12,6 +12,7 @@ import argparse
 import gzip
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--search-root", type=Path, required=True)
-    parser.add_argument("--pyserini", default="pyserini")
     args = parser.parse_args()
 
     records = load_records(args.source)
@@ -74,8 +74,9 @@ def main() -> None:
             handle.write(json.dumps(document, ensure_ascii=False) + "\n")
     subprocess.run(
         [
-            args.pyserini,
-            "index.lucene",
+            sys.executable,
+            "-m",
+            "pyserini.index.lucene",
             "--collection",
             "JsonCollection",
             "--input",

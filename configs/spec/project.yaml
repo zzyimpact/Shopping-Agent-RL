@@ -1,0 +1,26 @@
+# 仅记录 DESIGN.md / WORKFLOW.md 已冻结或明确决定的项目值。
+project:
+  name: shopping-agent-rl
+  model: Qwen3-8B
+  catalog: Catalog-Fine
+  seed: 1
+  max_action_steps: 30
+  scenarios:
+    - single
+    - single_persona
+
+sft:
+  successful_trajectories_per_scenario: 6000
+  unique_tasks_per_scenario: 3000
+  target_successful_demos_per_task: 2
+
+grpo:
+  group_size: 8
+  task_groups_per_update: 32
+  updates: 200
+  max_context: 32768
+  kl_penalty: false
+
+reward:
+  main_endpoint: strict
+  optional_paper_endpoint: loose

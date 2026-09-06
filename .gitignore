@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Large artifacts
+/data/
+/datasets/
+/models/
+/checkpoints/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# Logs and generated runs
+logs/
+runs/
+outputs/
+experiments/*/
+!experiments/.gitkeep
+*.log
+
+# Caches and temporary files
+.cache/
+*.tmp
+*.swp
+.DS_Store

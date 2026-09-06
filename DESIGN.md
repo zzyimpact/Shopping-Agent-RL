@@ -278,6 +278,15 @@ Single & Pers:
   test  = 1,343
 ```
 
+论文报告的 personalized train 数为 3,383；当前可复现的 public/upstream snapshot
+及其 runner 实际暴露 3,323 条。本项目正式使用实际 upstream pool：
+
+```text
+Project actual Single & Pers:
+  train = 3,323
+  test  = 1,343
+```
+
 ## 3.4 Max action `[FROZEN]`
 
 ```text
@@ -550,7 +559,7 @@ GPT-5.6 Sol API
 不采用：
 
 ```text
-Pers: 3383 tasks × 2
+Pers: 3323 tasks × 2
 Single: ~6766 tasks × 1
 ```
 
@@ -567,7 +576,7 @@ Single：
 Pers：
 
 ```text
-3000 / 3383 ≈ 88.7%
+3000 / 3323 ≈ 90.28%
 ```
 
 因此最终解释原则：
@@ -1454,6 +1463,10 @@ Project recommended default：assistant-only loss。
 ### D7 — GRPO backend
 Paper：ROLL。  
 Project：Hugging Face TRL；不安装 ROLL 或 veRL。
+
+### D8 — Personalized train pool
+Paper：3,383 personalized train instructions。
+Project：当前 public/upstream snapshot 与 runner 实际暴露 3,323；项目使用可复现的 3,323 条。
 
 所有新增 deviation 必须进入 `experiments/deviations.md`。
 

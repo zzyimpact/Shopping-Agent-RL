@@ -8,6 +8,13 @@ project:
   scenarios:
     - single
     - single_persona
+  actual_dataset_counts:
+    single:
+      train: 21962
+      test: 1459
+    single_persona:
+      train: 3323
+      test: 1343
 
 sft:
   successful_trajectories_per_scenario: 6000

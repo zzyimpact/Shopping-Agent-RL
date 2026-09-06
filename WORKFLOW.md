@@ -239,6 +239,8 @@ Dataset profiling 至少包括：
 
 以上dataset profiling的具体数据必须落在一个文档里供用户审阅。其中每个senario必须给出至少两个真实的完整数据例子，让用户清晰直观地理解“数据到底什么样”。
 
+当前 public/upstream snapshot 的 Single&Pers train pool 实际为 3,323；论文报告的 3,383 作为 paper fact 保留，项目使用可复现的 3,323，不自行补齐或重新切分。
+
 Reward：
 
 - 优先 wrap/reuse upstream scorer；

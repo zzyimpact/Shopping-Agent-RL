@@ -1,6 +1,6 @@
 # P2 数据审计与 profiling
 
-**状态**：部分完成；需要用户审阅：是。本文记录 remote 真实数据，不把 persona 计数差异静默修正。
+**状态**：完成；需要用户审阅：是。本文记录 remote 真实数据，并正式采用项目 actual persona train pool。
 
 ## 数据来源与 fingerprint
 
@@ -13,9 +13,9 @@
 
 ## Official split 结论
 
-Standard split 直接使用数据中的 `tag`：`eval` 位于 source index `0..1458`，`train` 位于 `1459..23420`，计数正好为 1,459/21,962。upstream `run_envs/run_web_agent_text_env.py` 对 persona 使用固定范围：test=`0..1342`，train=`1459..4781`。因此 remote 实际 persona 计数为 **1,343/3,323**，不是 DESIGN.md 冻结的 **1,343/3,383**。
+Standard split 直接使用数据中的 `tag`：`eval` 位于 source index `0..1458`，`train` 位于 `1459..23420`，计数正好为 1,459/21,962。upstream `run_envs/run_web_agent_text_env.py` 对 persona 使用固定范围：test=`0..1342`，train=`1459..4781`。因此 remote 实际 persona 计数为 **1,343/3,323**；论文事实仍为 **1,343/3,383**，项目正式采用实际可复现的 3,323。
 
-这不是随机切分结果；脚本只恢复 upstream 明确写出的范围，并验证各 scenario train/test ID 交集为 0。由于缺少 60 个官方 persona train task，不能自行填补或改用比例切分。persona count 需要项目级决定后，才能把该场景称为与 DESIGN 完全一致的正式数据版本。
+这不是随机切分结果；脚本只恢复 upstream 明确写出的范围，并验证各 scenario train/test ID 交集为 0。项目不填补缺失的 60 条，也不改用比例切分；这是相对于论文报告数量的 reproducibility deviation。
 
 ## Manifest 与 hash
 
@@ -136,8 +136,8 @@ evaluator_only:
 
 ## 数据异常与未完成项
 
-1. persona train 计数为 3,323，与 DESIGN 冻结的 3,383 冲突；这是当前唯一 project-level open decision。
-2. 当前 snapshot 没有 `query`、`reason_key`、`instruction_sample` 等 upstream goal 代码会读取的派生字段；`goal.py` 在 persona 模式要求 `instruction_sample`，因此不能把 `instruction_simple` 静默改名替代。
-3. `/root/ShopSimulator/shop_env/search_engine` 与 generated Lucene indexes 不在当前 checkout，无法完成真实 search/index/购买 episode smoke。
-4. `zh_core_web_sm` 仍缺失；官方下载在远程超时，不能用 `spacy.blank("zh")` 替代。tokenizer profiling 已完成；没有加载 Qwen3-8B 权重。
-5. 因上述 upstream 数据/环境缺口，本轮没有把 gold-aware smoke trajectory 写入训练数据，也没有宣称 environment/reward parity 已通过。
+1. 论文报告 3,383，而当前 public/upstream snapshot 为 3,323；项目 actual configuration 已正式冻结为 3,323。
+2. 当前 snapshot 没有 `query`、`reason_key`、`instruction_sample` 等 upstream goal 代码会读取的字段；source trace 见 `P2_ENVIRONMENT_SETUP.md`。其中 `reason_key` 可安全为空，`instruction_sample` 有 single_eval 的 persona 投影证据可由 `instruction_simple` 兼容，但 `query` 没有官方 deterministic 生成逻辑，不能自行发明。
+3. 官方 ShopSimulator 从未提交 `search_engine`；已按 pinned Princeton WebShop source 恢复 indexing infrastructure，并成功构建 23,421-doc Catalog-Fine index。真实 environment 仍因 `query` data contract 缺失未启动。
+4. `zh_core_web_sm` 已验证为 `core_web_sm` 3.8.0；tokenizer profiling 已完成；没有加载 Qwen3-8B 权重。
+5. 因 `query` 缺口，本轮没有把 gold-aware smoke trajectory 写入训练数据，也没有宣称 environment/reward end-to-end parity 已通过。

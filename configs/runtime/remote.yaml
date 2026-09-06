@@ -8,6 +8,13 @@ remote:
   manifests_root: /root/data/shopsim/manifests
   models_root: /root/data/models
   tokenizer_path: /root/data/models/Qwen3-8B-tokenizer
+  search_engine_source: /root/data/shopsim/webshop-source
+  search_root: /root/data/shopsim/search_engine
+  search_resources: /root/data/shopsim/search_engine/resources
+  search_index: /root/data/shopsim/search_engine/indexes
+  spacy_model: zh_core_web_sm==3.8.0
+  service_url: http://127.0.0.1:5000
+  service_port: 5000
   runs_root: /root/runs/shopsim-rl
   cache_root: /root/.cache/shopsim-rl
   python: /root/miniconda3/bin/python

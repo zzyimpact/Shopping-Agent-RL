@@ -7,6 +7,8 @@
 **项目定位**：基于论文 *ShopSimulator: Evaluating and Exploring RL-Driven LLM Agent for Shopping Assistants* 的任务、数据、环境与训练思路，完成一个以 **LLM post-training / online agent RL / GRPO** 为核心的可运行复现项目。  
 **主要用途**：项目实施、Codex/开发协作、实验记录、最终 README/简历材料的上游设计文档。
 
+**项目语言约定**：Codex 回复、项目文档和新写代码的注释/docstring 以中文为主；RL、LLM、SFT、GRPO、rollout、checkpoint、PEFT、LoRA、API 等术语可使用英文。upstream 原有代码不因语言约定修改。
+
 ---
 
 # 0. 文档使用约定
@@ -195,6 +197,7 @@ SFT：
 
 RL：
 - ROLL framework；
+- Project backend：Hugging Face TRL（相对论文 ROLL 的 deviation）；
 - GRPO；
 - Rloose / Rstrict；
 - omit KL loss；
@@ -934,17 +937,15 @@ KL penalty = off
 
 未来测试 KL 属于额外 ablation。
 
-## 16.7 Optimization backend `[OPEN IMPLEMENTATION DECISION]`
+## 16.7 Optimization backend `[PROJECT-FIXED]`
 
 论文使用 ROLL。
 
-本项目：
-- 优先考虑 ROLL；
-- 若其对单卡 external-env online rollout / LoRA 集成存在明显不适配，可选择成熟 GRPO backend；
-- 不重写完整 distributed RL infra；
-- 不论 backend，必须保持 online ShopEnv rollout、group-size semantics、reward semantics、Base vs SFT initialization、checkpoint/eval semantics。
+本项目使用 Hugging Face TRL；不安装或并行实现 ROLL、veRL。
 
-正式 GRPO implementation 前单独冻结 backend。
+不论后续采用 TRL 的 environment factory、custom rollout function 或其他薄 adapter，都必须保持 online ShopEnv rollout、group-size semantics、reward semantics、Base vs SFT initialization、checkpoint/eval semantics。
+
+后续只实现最薄的 ShopSimulator ↔ TRL integration，不重写完整 distributed RL infra。
 
 ---
 
@@ -1452,7 +1453,7 @@ Project recommended default：assistant-only loss。
 
 ### D7 — GRPO backend
 Paper：ROLL。  
-Project：优先 ROLL，backend 尚未最终冻结。
+Project：Hugging Face TRL；不安装 ROLL 或 veRL。
 
 所有新增 deviation 必须进入 `experiments/deviations.md`。
 
@@ -1577,7 +1578,7 @@ grpo:
   max_context: 32K
   kl_penalty: false
   parameter_update: LoRA/PEFT
-  backend: TBD
+  backend: Hugging Face TRL
 
 evaluation:
   intermediate_subset_size: 128

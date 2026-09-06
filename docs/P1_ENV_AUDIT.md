@@ -1,52 +1,72 @@
-# P1 环境审计
+# P1 Remote CPU 环境审计
 
-## OS / Python
+**文档状态**：P1 bootstrap 记录；需要用户审阅：否（远程 checkout 缺失属于后续 open decision）。
 
-盘点目标为 SSH alias `rtx-pro-6000-3`；远端 `hostname` 输出为 `autodl-container-vwjczv9tz3-ef252ce2`。
+## 远程定位
+
+- SSH alias：`rtx-pro-6000-3`
+- `hostname`：`autodl-container-vwjczv9tz3-ef252ce2`
+- `pwd`：`/root`
+- 预期项目路径：`/root/shopping-agent-rl`，当前不存在。
+- 预期 upstream 路径：`/root/ShopSimulator`，当前不存在。
+- 已定向查找：`/root`、`/tmp`、`/workspace`、`/workspaces`、`/project`、`/projects`、`/data`、`/mnt`、`/opt`、`/srv`；未发现项目、upstream 或论文 PDF。
+
+## Python / conda
 
 ```text
-uname -a: Linux autodl-container-vwjczv9tz3-ef252ce2 5.15.0-78-generic #85-Ubuntu SMP Fri Jul 7 15:25:09 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux
-python --version: command not found on PATH
-which python: command not found on PATH
-pip --version: command not found on PATH
-usable Python: /root/miniconda3/bin/python (Python 3.12.3)
-usable pip: /root/miniconda3/bin/pip (pip 24.0)
+Python: /root/miniconda3/bin/python 3.12.3
+pip: /root/miniconda3/bin/pip 24.0
 conda: /root/miniconda3/bin/conda 24.4.0
+环境：仅 base，未创建新的 conda/venv
 ```
 
-当前只有 conda `base` 环境（`/root/miniconda3`），没有发现已激活的 venv；未创建新环境。
+系统 `python` / `pip` 不在 PATH；P1 脚本使用上述绝对路径。
 
-## 已安装的相关包
+## torch / CUDA
 
-通过 `/root/miniconda3/bin/python` 检查 package metadata：
+```text
+torch: 2.8.0+cu128
+compiled CUDA: 12.8
+torch.cuda.is_available(): False
+```
 
-| 包 | 版本 / 状态 |
-|---|---|
-| torch | `2.8.0+cu128` |
-| numpy | `2.3.2` |
-| requests | `2.31.0` |
-| PyYAML | `6.0.2` |
-| 其余训练/环境包 | 见下方缺失列表 |
+当前为 CPU-only，CUDA unavailable 不视为失败；本轮没有修改 torch。
 
-Torch 额外检查：compiled CUDA `12.8`；`torch.cuda.is_available()` 为 `False`，符合当前 CPU-only 条件。`nvidia-smi` 文件存在但在当前容器中因权限被拒绝，未进行 GPU 操作。
+## 本轮安装与复用
 
-## 环境与直接复用判断
+已有并继续复用：`torch==2.8.0+cu128`、`numpy==2.3.2`、`PyYAML==6.0.2`。通过显式 `torch==2.8.0+cu128` constraint 安装了：
 
-- 远端 base Python 可复用，且已有 CUDA-enabled PyTorch wheel；当前不需要重装或升级。
-- `requests`、NumPy、PyYAML 可支持部分轻量脚本。
-- 远端未找到 upstream ShopSimulator checkout、项目目录或论文 PDF；本地 checkout 可作为当前源码审计对象，但正式远程运行前需按 WORKFLOW.md 补齐 checkout 和数据/index 路径。
-- 本地 upstream 的 `normalize.py` 可独立导入；`goal.py`、`engine.py`、`web_agent_text_env.py` 的导入分别受 `spacy`、`tqdm/pyserini`、`gym` 等依赖阻塞。
+| 包 | 版本 |
+|---|---:|
+| transformers | 5.16.1 |
+| tokenizers | 0.23.2 |
+| datasets | 5.0.1 |
+| accelerate | 1.14.0 |
+| peft | 0.20.0 |
+| trl | 1.12.0 |
+| safetensors | 0.8.0 |
+| sentencepiece | 0.2.2 |
+| pytest | 9.1.1 |
+| requests | 2.34.2 |
+| pandas | 3.0.5 |
+| pyarrow | 25.0.1 |
 
-## 已知缺失依赖
+上游 CPU 依赖安装尝试中，`pyserini==2.4.0` 明确要求 `torch>=2.9`，与冻结的 torch 冲突，已停止该版本安装；没有通过升级 torch 绕过冲突。改用兼容当前 torch 的 `pyserini==1.4.0`，并已完成安装。
 
-未安装：`transformers`、`tokenizers`、`accelerate`、`peft`、`trl`、`deepspeed`、`ray`、`vllm`、`flash-attn`、`datasets`、`sentencepiece`、`safetensors`、`faiss/faiss-cpu`、`pandas`、`scipy`、`scikit-learn`、`pytest`、`ROLL`、`verl`、`flask`、`gym/gymnasium`、`pyserini`、`spacy`、`thefuzz`、`rich`、`openai`。
+## TRL compatibility
 
-## 后续可能需要安装
+已确认 `import trl`、`transformers`、`datasets`、`accelerate`、`peft` 的版本组合可安装于 Python 3.12，并保留 torch 2.8.0+cu128。TRL exact version：`1.12.0`。本轮没有编写 GRPO integration。
 
-后续 P1/P2 可能需要按上游 `shop_env/requirements.txt` 补齐 Flask/Gym/pyserini/spaCy/thefuzz/rich 等环境依赖，并按训练 backend 选择安装 Transformers、PEFT、TRL 或 ROLL/veRL 相关组件。具体版本应在依赖冲突和 GPU_READY 前验证后再决定，不在本任务猜测或安装。
+## 未安装项目
 
-本任务没有执行任何大包安装、重装、升级或降级；没有下载模型权重，也没有调用 teacher API。
+没有安装 ROLL、veRL、vLLM、SGLang、DeepSpeed、FlashAttention、TensorRT-LLM 或其他 GPU-specific engine；没有下载 Qwen3-8B/其他大模型，也没有调用 teacher API。
 
-## 审计限制
+## 远程项目 / upstream 阻塞
 
-远程容器的系统 `python`/`pip` 不在 PATH，使用绝对路径完成了盘点；这不是项目级环境决策。由于远端缺少上游 checkout，本阶段没有启动 ShopSimulator 服务，也没有进行正式训练或评测。
+由于远程缺少 `shopping-agent-rl/` 和 ShopSimulator checkout，无法在远程完成项目 Git 同步、upstream commit pin、关键 upstream module import 或服务启动验证。当前本地 checkout 不能替代 remote validation；`zh_core_web_sm` 因 GitHub 下载超时未安装，因此即使源码恢复，`goal.py` 的导入仍需补齐该模型。这不是 P2 工作，也未生成任何 task manifest、dataset profile 或 reward artifact。
+
+## 运行时路径
+
+路径约定已写入 `configs/runtime/remote.yaml`：项目代码 `/root/shopping-agent-rl`，upstream `/root/ShopSimulator`，数据 `/root/data/shopsim`，模型 `/root/data/models`，runs `/root/runs/shopsim-rl`，cache `/root/.cache/shopsim-rl`。这些目录尚未因远程项目缺失而自动创建。
+
+明确结论：没有创建新虚拟环境；没有修改 torch；没有下载模型；没有调用付费 API；没有执行 P2。

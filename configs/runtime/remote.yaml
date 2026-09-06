@@ -1,0 +1,13 @@
+# 仅保存远程机器路径，不包含实验定义或模型超参数。
+remote:
+  host: rtx-pro-6000-3
+  project_root: /root/shopping-agent-rl
+  upstream_root: /root/ShopSimulator
+  data_root: /root/data/shopsim
+  models_root: /root/data/models
+  runs_root: /root/runs/shopsim-rl
+  cache_root: /root/.cache/shopsim-rl
+  python: /root/miniconda3/bin/python
+  pip: /root/miniconda3/bin/pip
+
+# 以上路径是 P1 运行时约定；若远程实际挂载路径不同，只修改本文件。

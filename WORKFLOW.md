@@ -11,10 +11,10 @@
 项目采用：
 
 ```text
-Codex：实现 / 复用 / 测试 / 汇报
-用户：决策 / review / 验收 / 结果分析 / 批准昂贵操作
+Codex：实现 / 复用 / 测试 / 汇报 / branch、commit、push、正常 merge
+用户：审阅阶段输出、重要实验结果、重要设计/分析文档和项目级 open decisions
 Git：唯一代码 source of truth
-本地电脑：代码 review、大模型下载、大文件高速中转
+本地电脑：大模型下载、大文件高速中转
 远程 CPU：环境、数据、ShopSimulator、teacher API、profiling、分析
 远程 GPU：Base inference、SFT、GRPO、正式 evaluation
 ```
@@ -60,13 +60,12 @@ Codex不得自行：
 ```text
 Codex 修改代码
 → tests / git diff
-→ 用户 review
-→ commit
-→ remote git pull
+→ git commit
+→ git push
 → 执行批准版本
 ```
 
-远程服务器原则上不手工改 source code。
+用户不需要逐文件 review source code；Codex 自主管理正常的 branch、commit、push 和 merge。远程服务器原则上不手工改 source code。
 
 每个正式实验必须能映射到：
 - project git commit；
@@ -183,7 +182,7 @@ P0 交付：
 5.需要新增的模块；
 6.open decisions。
 
-用户 review 后进入 P1。
+P0 阶段输出供用户审阅；无 project-level conflict 时 Codex 可直接进入 P1。
 
 ---
 
@@ -201,6 +200,8 @@ P0 交付：
 - data/model/cache/run dirs；
 - training dependencies；
 -可以提前安装的 CUDA-enabled PyTorch/training packages。
+
+项目 RL backend 固定为 Hugging Face TRL；P1 不安装 ROLL、veRL、vLLM、SGLang、DeepSpeed 或 FlashAttention。
 
 RTX PRO 6000 Blackwell 的 PyTorch/CUDA/backend 版本必须确认支持该架构，不允许随便固定旧版本。
 
@@ -743,4 +744,3 @@ Codex 实现
 > **GPU 启用不是“开始开发”，而是“执行已经准备好的正式实验”。**
 
 ---
-

@@ -6,4 +6,4 @@
 
 项目定义见 [DESIGN.md](DESIGN.md)，实施顺序与验收边界见 [WORKFLOW.md](WORKFLOW.md)。
 
-当前状态：P0 upstream audit 与项目骨架已建立；P1 环境盘点已完成，等待 review 后进入数据、环境和 reward profiling。
+当前状态：P0 upstream audit 已完成；P1 Remote CPU Bootstrap 已完成基础依赖与脚本准备，等待解决远程 checkout 定位后进入 P2。

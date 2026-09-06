@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.rewards.shopsim_reward import score_episode
+from rewards.shopsim_reward import score_episode
 
 
 def product(*, category="家居›枕头›乳胶枕", title="天然乳胶枕", attrs=None):

@@ -8,6 +8,7 @@
 - 上游 README 声明的公开仓库：`https://github.com/ShopAgent-Team/ShopSimulator`。
 - 审计时通过 GitHub API 读取到 `main` 的参考 commit：`51bb26012cee31aea7ac26177c5ffe807026ac07`（2026-09-06 查询）；这是远程参考值，不等同于本地 checkout 的已验证 commit。
 - 远程 upstream 路径：`/root/ShopSimulator`；目录内容对应 GitHub main 参考 commit `51bb26012cee31aea7ac26177c5ffe807026ac07`。远程目录没有 upstream `.git` 元数据，因此该 hash 是已审计的上游参考 pin，不等同于本地 checkout 的可验证 Git commit。
+- 当前 remote source fingerprint：`sha256=324238fc96a1849b4181c74b29f762f104f7a7d071d7012a7d1e635259d24928`。生成命令为：`cd /root/ShopSimulator && find . -type f -not -path './shop_env/data/*' -not -path './outputs/*' -not -path './*/outputs/*' -not -path './cache/*' -not -path './*/cache/*' -not -path './__pycache__/*' -not -path './*/__pycache__/*' -not -path './shop_env/search_engine/indexes*/*' -not -path './*/indexes/*' -not -name '*.pyc' -not -path './shop_env/web_agent_site/models/logs/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum`。该 fingerprint 覆盖当前实际依赖的 source/config/templates，排除 data、outputs、cache、`__pycache__`、generated index、临时日志。
 
 ## 相关架构（Single / Single&Pers）
 

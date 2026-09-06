@@ -30,7 +30,11 @@ printf 'torch==2.8.0+cu128\n' > "${TORCH_CONSTRAINT}"
   "flask==3.1.3" \
   "gym==0.26.2" \
   "spacy==3.8.16" \
-  "pyserini==1.4.0" \
+  "pyserini==0.17.1" \
+  "faiss-cpu==1.15.0" \
+  "lightgbm==4.7.0" \
+  "nmslib==2.1.2" \
+  "selenium==4.48.0" \
   "thefuzz==0.22.1" \
   "cleantext==1.1.4" \
   "rank_bm25==0.2.2" \
@@ -40,6 +44,11 @@ if ! "${PYTHON_BIN}" -c 'import spacy; raise SystemExit(0 if spacy.util.is_packa
   "${PYTHON_BIN}" -m spacy download zh_core_web_sm
 fi
 
+if ! command -v javac >/dev/null 2>&1; then
+  echo "缺少 javac；请按 upstream setup 安装 OpenJDK 21 后重试。" >&2
+  exit 2
+fi
+
 mkdir -p \
   "${PROJECT_ROOT}/configs/runtime" \
   /root/data/shopsim \
@@ -47,4 +56,4 @@ mkdir -p \
   /root/runs/shopsim-rl \
   /root/.cache/shopsim-rl
 
-echo "CPU bootstrap 完成；未创建新环境、未修改 torch、未下载模型。"
+echo "CPU bootstrap 完成；未创建新环境、未修改 torch、未下载大模型。"

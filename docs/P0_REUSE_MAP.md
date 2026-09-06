@@ -3,11 +3,11 @@
 ## Upstream 定位与版本
 
 - 本地 checkout：`/Users/zzy/Desktop/Coding/shop-rl/ShopSimulator-main`
-- P1 重新检查远程 SSH 主机 `rtx-pro-6000-3`：`/root` 及 `/tmp`、`/workspace`、`/workspaces`、`/project`、`/projects`、`/data`、`/mnt`、`/opt`、`/srv` 的浅层定向查找仍未找到 `shopping-agent-rl`、ShopSimulator checkout 或论文 PDF。
+- P1 初次检查未发现目录；随后在确认目标路径为空且无远程 GitHub 认证后，将已推送项目快照恢复到 `/root/shopping-agent-rl`，并将 upstream 源码快照恢复到 `/root/ShopSimulator` 供 remote-only CPU validation。
 - 本地目录没有 `.git` 元数据，因此无法验证 commit、branch 或 clean 状态；本报告不伪造 commit hash。正式实施前必须补齐可验证的 upstream commit pin。
 - 上游 README 声明的公开仓库：`https://github.com/ShopAgent-Team/ShopSimulator`。
 - 审计时通过 GitHub API 读取到 `main` 的参考 commit：`51bb26012cee31aea7ac26177c5ffe807026ac07`（2026-09-06 查询）；这是远程参考值，不等同于本地 checkout 的已验证 commit。
-- 远程 upstream pin：未建立。SSH 主机没有目标目录，且远程无法通过当前认证访问项目 GitHub 私有仓库；本轮不复制本地 checkout 替代远程 pin。
+- 远程 upstream 路径：`/root/ShopSimulator`；目录内容对应 GitHub main 参考 commit `51bb26012cee31aea7ac26177c5ffe807026ac07`，但因远程 Git HTTPS/SSH 不可用，目录本身没有 upstream `.git` 元数据，仍需后续补齐可验证 pin。
 
 ## 相关架构（Single / Single&Pers）
 

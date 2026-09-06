@@ -19,9 +19,9 @@ import sys
 expected = [
     "torch", "transformers", "datasets", "accelerate", "peft", "trl",
     "safetensors", "sentencepiece", "pytest",
-    "flask", "gym", "pyserini", "spacy", "thefuzz", "bs4", "rich",
+    "flask", "gym", "pyserini", "faiss-cpu", "selenium", "spacy", "thefuzz", "bs4", "rich",
 ]
-module_names = {"bs4": "bs4"}
+module_names = {"bs4": "bs4", "faiss-cpu": "faiss"}
 missing = []
 for name in expected:
     module = module_names.get(name, name.replace("-", "_"))
@@ -39,6 +39,10 @@ print(f"python_version={sys.version.split()[0]}")
 print(f"torch_cuda_compiled={torch.version.cuda}")
 print(f"cuda_available={torch.cuda.is_available()}")
 
+import spacy
+if not spacy.util.is_package("zh_core_web_sm"):
+    missing.append("zh_core_web_sm")
+
 if missing:
     raise SystemExit(f"缺少关键 package: {', '.join(missing)}")
 
@@ -48,6 +52,7 @@ print("training imports: OK")
 PY
 
 if [[ -d "${UPSTREAM_ROOT}" ]]; then
+  command -v javac >/dev/null 2>&1 || { echo "缺少 javac/OpenJDK" >&2; exit 2; }
   export PYTHONPATH="${UPSTREAM_ROOT}/shop_env:${UPSTREAM_ROOT}/single_eval:${PYTHONPATH:-}"
   "${PYTHON_BIN}" - <<'PY'
 import importlib

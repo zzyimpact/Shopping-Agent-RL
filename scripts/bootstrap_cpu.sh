@@ -41,7 +41,14 @@ printf 'torch==2.8.0+cu128\n' > "${TORCH_CONSTRAINT}"
   "openai==3.8.0"
 
 if ! "${PYTHON_BIN}" -c 'import spacy; raise SystemExit(0 if spacy.util.is_package("zh_core_web_sm") else 1)'; then
-  "${PYTHON_BIN}" -m spacy download zh_core_web_sm
+  # 官方模型托管站点在远程机器上可能不可达；不要因此回滚已完成的 CPU 依赖准备。
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${SPACY_DOWNLOAD_TIMEOUT:-60}" "${PYTHON_BIN}" -m spacy download zh_core_web_sm || \
+      echo "警告：zh_core_web_sm 下载失败；upstream goal/text env 验证将保持阻塞。" >&2
+  else
+    "${PYTHON_BIN}" -m spacy download zh_core_web_sm || \
+      echo "警告：zh_core_web_sm 下载失败；upstream goal/text env 验证将保持阻塞。" >&2
+  fi
 fi
 
 if ! command -v javac >/dev/null 2>&1; then

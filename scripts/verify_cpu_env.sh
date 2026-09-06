@@ -13,7 +13,6 @@ fi
 "${PYTHON_BIN}" - <<'PY'
 import importlib
 import importlib.metadata as metadata
-import pathlib
 import sys
 
 expected = [
@@ -40,8 +39,9 @@ print(f"torch_cuda_compiled={torch.version.cuda}")
 print(f"cuda_available={torch.cuda.is_available()}")
 
 import spacy
-if not spacy.util.is_package("zh_core_web_sm"):
-    missing.append("zh_core_web_sm")
+has_zh_model = spacy.util.is_package("zh_core_web_sm")
+if not has_zh_model:
+    print("warning=zh_core_web_sm 未安装；goal/text env 将单独标记为不可导入")
 
 if missing:
     raise SystemExit(f"缺少关键 package: {', '.join(missing)}")
@@ -56,12 +56,13 @@ if [[ -d "${UPSTREAM_ROOT}" ]]; then
   export PYTHONPATH="${UPSTREAM_ROOT}/shop_env:${UPSTREAM_ROOT}/single_eval:${PYTHONPATH:-}"
   "${PYTHON_BIN}" - <<'PY'
 import importlib
+import spacy
+
+has_zh_model = spacy.util.is_package("zh_core_web_sm")
 
 modules = [
     "web_agent_site.engine.normalize",
     "web_agent_site.engine.engine",
-    "web_agent_site.engine.goal",
-    "web_agent_site.envs.web_agent_text_env",
     "env",
 ]
 for name in modules:
@@ -71,7 +72,17 @@ for name in modules:
         raise SystemExit(f"upstream import failed: {name}: {type(exc).__name__}: {exc}")
     print(f"upstream import: {name}=OK")
 else:
-    print("upstream imports: OK")
+    print("upstream core imports: OK")
+
+if has_zh_model:
+    for name in ("web_agent_site.engine.goal", "web_agent_site.envs.web_agent_text_env"):
+        try:
+            importlib.import_module(name)
+        except Exception as exc:
+            raise SystemExit(f"upstream import failed: {name}: {type(exc).__name__}: {exc}")
+        print(f"upstream import: {name}=OK")
+else:
+    print("upstream optional imports: SKIP (缺少 zh_core_web_sm；未修改 upstream)")
 PY
 else
   echo "未找到 upstream checkout：${UPSTREAM_ROOT}" >&2

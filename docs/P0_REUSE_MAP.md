@@ -7,7 +7,7 @@
 - 本地目录没有 `.git` 元数据，因此无法验证 commit、branch 或 clean 状态；本报告不伪造 commit hash。正式实施前必须补齐可验证的 upstream commit pin。
 - 上游 README 声明的公开仓库：`https://github.com/ShopAgent-Team/ShopSimulator`。
 - 审计时通过 GitHub API 读取到 `main` 的参考 commit：`51bb26012cee31aea7ac26177c5ffe807026ac07`（2026-09-06 查询）；这是远程参考值，不等同于本地 checkout 的已验证 commit。
-- 远程 upstream 路径：`/root/ShopSimulator`；目录内容对应 GitHub main 参考 commit `51bb26012cee31aea7ac26177c5ffe807026ac07`，但因远程 Git HTTPS/SSH 不可用，目录本身没有 upstream `.git` 元数据，仍需后续补齐可验证 pin。
+- 远程 upstream 路径：`/root/ShopSimulator`；目录内容对应 GitHub main 参考 commit `51bb26012cee31aea7ac26177c5ffe807026ac07`。远程目录没有 upstream `.git` 元数据，因此该 hash 是已审计的上游参考 pin，不等同于本地 checkout 的可验证 Git commit。
 
 ## 相关架构（Single / Single&Pers）
 

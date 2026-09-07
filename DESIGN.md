@@ -520,6 +520,28 @@ GPT-5.6 Sol API
 
 论文使用 GPT-4.1；本项目使用其他 teacher 时必须写入 Deviation from Paper。
 
+## 7.3 P3 infrastructure and approved collection policy `[PROJECT-FIXED]`
+
+Teacher controller 在本地运行，ShopSimulator CPU environment 保持在
+`rtx-pro-6000-3:/root/shopping-agent-rl`，通过 SSH local port forwarding 提供仅绑定
+`127.0.0.1` 的 HTTP endpoint。本地只负责 relay adapter、retry/timeout、diagnostics、
+durable trajectory storage、resume 和日志；不在本地复制 Lucene、Pyserini、Java、spaCy
+或 Catalog runtime。P3-0 的 API smoke 与 environment smoke 分离，P3-0 不调用真实
+teacher API，不执行正式 collection。
+
+已批准的 collection policy：每个 scenario 目标 6,000 条 accepted successful
+trajectories，约 3,000 个 unique tasks；每 task 接受 1–3 条，2 条是默认 target 而非
+hard constraint。优先级为 `Success > behavior quality > task coverage > diversity`，
+采用 coverage-first 的 Pass A/B/C 与独立 stochastic sampling + post-hoc 行为多样性
+过滤；不为制造 diversity 强迫 teacher 绕路。困难 task 使用 bounded retry 和同一
+stratum 的 deterministic reserve replacement。具体 attempt cap、similarity threshold
+和 teacher relay model identifier 在 P3a profiling 后再冻结。
+
+Teacher 仅使用 visible `Thought: 简短 action rationale` 与 `Action:` protocol，不获取
+hidden chain-of-thought；prompt 优先复用 upstream Single/Persona system prompt、
+`user_persona`（Persona）及完整 visible conversation history。上述 policy 记录于
+`docs/P3_TEACHER_COLLECTION.md`。
+
 ---
 
 # 8. SFT 数据规模

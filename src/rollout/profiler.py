@@ -8,10 +8,12 @@ remote ShopSimulator HTTP protocol, while keeping every attempt auditable.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Mapping
 
 from env.teacher_env_client import TeacherEnvClient, TeacherEnvError
@@ -45,6 +47,17 @@ class TeacherModelMismatch(ProfileStop):
     pass
 
 
+@dataclass(frozen=True)
+class ResumeRun:
+    run_id: str
+    status: str
+    created_at: str
+    attempts: int
+    touched_tasks: int
+    terminal_tasks: int
+    successes: int
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -67,11 +80,17 @@ def _task_ids_hash(task_ids: list[str], *, trailing_newline: bool = False) -> st
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _find_resume_run(data_root: Path, scenario: str, task_ids: list[str]) -> str | None:
-    candidates: list[tuple[str, str]] = []
+def _find_resume_run(
+    data_root: Path,
+    scenario: str,
+    task_ids: list[str],
+    expected_config: Mapping[str, Any] | None = None,
+) -> tuple[ResumeRun | None, int]:
+    candidates: list[ResumeRun] = []
+    incompatible: list[str] = []
     scenario_root = data_root / scenario
     if not scenario_root.exists():
-        return None
+        return None, 0
     for directory in sorted(p for p in scenario_root.iterdir() if p.is_dir()):
         manifest_path = directory / "run_manifest.json"
         state_path = directory / "state.sqlite"
@@ -82,16 +101,45 @@ def _find_resume_run(data_root: Path, scenario: str, task_ids: list[str]) -> str
             import sqlite3
             db = sqlite3.connect(state_path)
             state = db.execute("SELECT value FROM run_state WHERE key='status'").fetchone()
+            if manifest.get("purpose") != "p3a_profiling" or manifest.get("scenario") != scenario or (state and state[0] == "complete"):
+                db.close()
+                continue
+            if list(manifest.get("selected_task_ids", task_ids)) != list(task_ids):
+                db.close()
+                incompatible.append(directory.name)
+                continue
+            if expected_config and any(manifest.get(key) != value for key, value in expected_config.items()):
+                db.close()
+                incompatible.append(directory.name)
+                continue
+            latest = db.execute("SELECT status FROM attempts ORDER BY rowid DESC LIMIT 1").fetchone()
+            status_text = str(state[0]) if state else (
+                "infrastructure_interrupted" if latest and latest[0] == "infrastructure_interrupted" else "incomplete"
+            )
+            attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
+            touched = int(db.execute("SELECT COUNT(DISTINCT task_id) FROM attempts").fetchone()[0])
+            terminal = int(db.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM attempts WHERE status='profile_unsolved'"
+            ).fetchone()[0])
+            successes = int(db.execute("SELECT COUNT(*) FROM attempts WHERE status='success'").fetchone()[0])
             db.close()
-            if manifest.get("purpose") == "p3a_profiling" and manifest.get("scenario") == scenario and (not state or state[0] != "complete"):
-                status_text = state[0] if state else "incomplete"
-                candidates.append((directory.name, status_text))
+            candidates.append(ResumeRun(
+                run_id=directory.name,
+                status=status_text,
+                created_at=str(manifest.get("created_at", directory.name)),
+                attempts=attempts,
+                touched_tasks=touched,
+                terminal_tasks=terminal,
+                successes=successes,
+            ))
         except Exception:
             continue
-    if len(candidates) > 1:
-        listed = ", ".join(f"{run_id} (status={status})" for run_id, status in candidates)
-        raise ValueError("存在多个未完成 profiling run；请用 --run-id 明确指定。可选 run_id: " + listed)
-    return candidates[0][0] if candidates else None
+    if not candidates and incompatible:
+        raise ValueError(
+            "存在未完成 profiling run，但都与当前 task/API 配置不兼容；请恢复原配置或新建 run。"
+        )
+    candidates.sort(key=lambda item: (item.created_at, item.run_id))
+    return (candidates[-1] if candidates else None), max(0, len(candidates) - 1)
 
 
 def _validate_resume_task_manifest(ledger: TeacherLedger, task_ids: list[str]) -> None:
@@ -187,10 +235,39 @@ def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_
 def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: TeacherClient,
                  task_id: str, scenario: str, phase: str, attempt_index: int,
                  expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop) -> str:
+    timings = {"reset": 0.0, "api": 0.0, "step": 0.0, "release": 0.0}
+    started = time.monotonic()
+    outcome = "interrupted"
+    try:
+        outcome = _execute_attempt(
+            ledger=ledger, env=env, client=client, task_id=task_id, scenario=scenario,
+            phase=phase, attempt_index=attempt_index, expected_model=expected_model,
+            logger=logger, guard=guard, timings=timings,
+        )
+        return outcome
+    finally:
+        total = time.monotonic() - started
+        accounted = sum(timings.values())
+        logger.line(
+            f"[TIMING] {task_id} phase={phase} attempt {attempt_index} | outcome={outcome} | "
+            f"reset={timings['reset']:.2f}s | API={timings['api']:.2f}s | "
+            f"env_steps={timings['step']:.2f}s | release={timings['release']:.2f}s | "
+            f"local/storage={max(0.0, total - accounted):.2f}s | total={total:.2f}s"
+        )
+
+
+def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: TeacherClient,
+                     task_id: str, scenario: str, phase: str, attempt_index: int,
+                     expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop,
+                     timings: dict[str, float]) -> str:
     attempt_id = ledger.start_attempt(task_id, teacher_attempt=attempt_index)
     session_id: str | None = None
     try:
-        reset = env.reset(scenario, task_id)
+        call_started = time.monotonic()
+        try:
+            reset = env.reset(scenario, task_id)
+        finally:
+            timings["reset"] += time.monotonic() - call_started
         session_id = reset.payload.get("session_id")
         if not isinstance(session_id, str) or not session_id:
             ledger.save_attempt(attempt_id, {
@@ -233,10 +310,14 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 raise ProfileStop("SIGINT")
             partial = {**record, "action_steps": step}
             try:
-                response: TeacherResponse = generate_or_interrupt(
-                    client, messages, ledger=ledger, attempt_id=attempt_id, partial_record=partial,
-                    resume_command=f"python3 scripts/profile_teacher.py --scenario {scenario} --resume", logger=logger,
-                )
+                call_started = time.monotonic()
+                try:
+                    response: TeacherResponse = generate_or_interrupt(
+                        client, messages, ledger=ledger, attempt_id=attempt_id, partial_record=partial,
+                        resume_command=f"python3 scripts/profile_teacher.py --scenario {scenario} --resume", logger=logger,
+                    )
+                finally:
+                    timings["api"] += time.monotonic() - call_started
             except TeacherClientError as exc:
                 if exc.kind == "teacher_empty_response":
                     record["termination_reason"] = "teacher_empty_response"
@@ -268,7 +349,11 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 ledger.save_attempt(attempt_id, record, status="malformed_action")
                 return "malformed_action"
             try:
-                result = env.step(session_id, response.text)
+                call_started = time.monotonic()
+                try:
+                    result = env.step(session_id, response.text)
+                finally:
+                    timings["step"] += time.monotonic() - call_started
             except TeacherEnvError as exc:
                 if getattr(exc, "kind", None) == "infrastructure":
                     ledger.mark_infrastructure_interrupted(attempt_id, {**record, "failure_class": "environment_infrastructure"})
@@ -326,7 +411,11 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
     finally:
         if session_id is not None:
             try:
-                env.release(session_id)
+                call_started = time.monotonic()
+                try:
+                    env.release(session_id)
+                finally:
+                    timings["release"] += time.monotonic() - call_started
             except Exception:  # best effort; the attempt artifact is authoritative
                 pass
         if guard.current_attempt_id == attempt_id:
@@ -362,9 +451,22 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
     env.release(probe.payload["session_id"])
     import uuid
     if resume and run_id is None:
-        run_id = _find_resume_run(data_root, scenario, task_ids)
-        if run_id is None:
+        selected, other_count = _find_resume_run(data_root, scenario, task_ids, {
+            "teacher_model": cfg["TEACHER_API_MODEL"],
+            "api_style": cfg["TEACHER_API_STYLE"],
+            "reasoning_effort": cfg["TEACHER_REASONING_EFFORT"],
+            "selected_task_list_hash": recorded_ids_hash,
+        })
+        if selected is None:
             raise FileNotFoundError("没有找到该 scenario 的唯一未完成 profiling run；请去掉 --resume 新建 run")
+        run_id = selected.run_id
+        logger.line(f"[RESUME] 自动选择最新且配置兼容的未完成 run: {run_id}")
+        logger.line(
+            f"[RESUME] status={selected.status} | touched={selected.touched_tasks}/24 | "
+            f"terminal={selected.terminal_tasks}/24 | attempts={selected.attempts} | successes={selected.successes}"
+        )
+        if other_count:
+            logger.line(f"[RESUME] 已排除 {other_count} 个更早的未完成 run；completed run 不参与 resume。")
     if run_id is None:
         run_id = "p3a-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     manifest = _manifest_for(run_id, scenario, task_data, health, context.source_hash,

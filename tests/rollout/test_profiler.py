@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 
 import pytest
 
@@ -53,15 +54,20 @@ class NeverDoneEnv(FakeEnv):
 
 def test_successful_termination_and_fresh_reset(tmp_path):
     env = FakeEnv()
+    output = io.StringIO()
     with TeacherLedger(tmp_path, manifest(), profile=True) as ledger:
-        guard = GracefulCollectionStop(ledger, "resume")
+        logger = ProgressLogger(output)
+        guard = GracefulCollectionStop(ledger, "resume", logger)
         result = _run_attempt(ledger=ledger, env=env, client=FakeClient(), task_id="task-1", scenario="single",
                               phase="first_success", attempt_index=1, expected_model="model-a",
-                              logger=ProgressLogger(), guard=guard)
+                              logger=logger, guard=guard)
         assert result == "success"
         assert len(list(ledger.paths.trajectories.glob("*.json"))) == 1
     assert env.resets == 1
     assert env.releases == 1
+    timing = output.getvalue()
+    assert "[TIMING] task-1 phase=first_success attempt 1" in timing
+    assert "reset=" in timing and "API=" in timing and "env_steps=" in timing and "total=" in timing
 
 
 def test_max_action_steps_is_30(tmp_path):
@@ -141,26 +147,33 @@ def test_profile_driver_runs_fixed_plan_with_fake_clients(tmp_path, monkeypatch)
     assert len(list((runs[0] / "trajectories").glob("*.json"))) == 72
 
 
-def test_resume_requires_explicit_run_id_when_multiple_runs_exist(tmp_path):
+def test_resume_selects_latest_incomplete_run(tmp_path):
     import json
     import sqlite3
 
     scenario_root = tmp_path / "single"
-    for run_id, status in (("run-old", "infrastructure_interrupted"), ("run-new", "stopped")):
+    for run_id, status, created_at in (
+        ("run-old", "infrastructure_interrupted", "2026-01-01T00:00:00+00:00"),
+        ("run-new", "stopped", "2026-01-02T00:00:00+00:00"),
+    ):
         run_root = scenario_root / run_id
         run_root.mkdir(parents=True)
         (run_root / "run_manifest.json").write_text(json.dumps({
-            "purpose": "p3a_profiling", "scenario": "single",
+            "purpose": "p3a_profiling", "scenario": "single", "created_at": created_at,
         }))
         db = sqlite3.connect(run_root / "state.sqlite")
         db.execute("CREATE TABLE run_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        db.execute(
+            "CREATE TABLE attempts (attempt_id TEXT PRIMARY KEY, task_id TEXT, status TEXT, "
+            "artifact_path TEXT, started_at TEXT, finished_at TEXT, teacher_attempt INTEGER)"
+        )
         db.execute("INSERT INTO run_state VALUES ('status', ?)", (status,))
         db.commit()
         db.close()
 
-    with pytest.raises(ValueError) as caught:
-        _find_resume_run(tmp_path, "single", [])
-    message = str(caught.value)
-    assert "--run-id" in message
-    assert "run-old (status=infrastructure_interrupted)" in message
-    assert "run-new (status=stopped)" in message
+    selected, older_count = _find_resume_run(tmp_path, "single", [])
+    assert selected is not None
+    assert selected.run_id == "run-new"
+    assert selected.status == "stopped"
+    assert selected.touched_tasks == 0
+    assert older_count == 1

@@ -110,8 +110,10 @@ bash scripts/teacher_env_down.sh
 ```
 
 如果 infrastructure interruption，已完成的 profiling artifact 会保留；检查 API 后仅
-对相应 scenario 使用 `--resume`。为避免在多个历史 run 之间静默选错，若该 scenario
-存在多个未完成 run，命令会列出 run ID/status 并要求显式选择。例如：
+对相应 scenario 使用 `--resume`。命令会按当前 API model/style/reasoning 与冻结 task
+列表筛选兼容 run，并自动选择 `created_at` 最新的未完成 run；终端会打印所选 run 的
+状态、已触及 task 数、terminal task 数、attempt 数和成功数。已完成 run 不参与选择。
+如需恢复更早的兼容 run，可用 `--run-id` 显式覆盖自动选择。例如：
 
 ```bash
 python3 scripts/profile_teacher.py \
@@ -120,5 +122,6 @@ python3 scripts/profile_teacher.py \
   --resume
 ```
 
-`--run-id` 必须来自命令报出的未完成 run；不会删除、覆盖或合并其他 run。若只有一个
-未完成 run，才可省略 `--run-id`。P3a 不自动调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。
+`--run-id` 必须来自同一 scenario 且配置兼容的 run；不会删除、覆盖或合并其他 run。
+如果没有兼容的未完成 run，命令会拒绝 resume 并要求恢复原配置或新建 run。P3a 不自动
+调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。

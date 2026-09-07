@@ -250,12 +250,21 @@ class TeacherLedger:
     def mark_profile_unsolved(self, task_id: str) -> None:
         """Mark the last completed teacher attempt as the profiling terminal outcome."""
         row = self.db.execute(
-            "SELECT attempt_id FROM attempts WHERE task_id=? AND status != 'infrastructure_interrupted' "
+            "SELECT attempt_id, artifact_path FROM attempts WHERE task_id=? AND status != 'infrastructure_interrupted' "
             "ORDER BY rowid DESC LIMIT 1", (task_id,)
         ).fetchone()
         if row:
-            with self.db:
-                self.db.execute("UPDATE attempts SET status='profile_unsolved' WHERE attempt_id=?", (row[0],))
+            attempt_id, relative_path = row
+            # Keep the JSON audit artifact and SQLite ledger in sync.  The
+            # summarizer reads artifacts, while resume reads SQLite; updating
+            # only one would silently lose the unsolved count in reports.
+            path = self.paths.root / relative_path
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                record = {"task_id": task_id, "termination_reason": "profile_unsolved", "success": False}
+            self.save_attempt(attempt_id, {**record, "termination_reason": "profile_unsolved", "success": False},
+                              status="profile_unsolved")
 
     def mark_infrastructure_interrupted(self, attempt_id: str, record: Mapping[str, Any]) -> Path:
         return self.save_attempt(attempt_id, record, status="infrastructure_interrupted")

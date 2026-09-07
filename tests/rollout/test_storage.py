@@ -84,3 +84,15 @@ def test_profile_extra_immutable_fields_refuse_resume(tmp_path):
     with pytest.raises(ResumeConfigMismatch, match="selected_task_list_hash"):
         TeacherLedger(tmp_path, manifest(purpose="p3a_profiling", selected_task_list_hash="b"), profile=True,
                       resume=True, extra_immutable_fields=("purpose", "selected_task_list_hash"))
+
+
+def test_profile_unsolved_updates_artifact_and_ledger(tmp_path):
+    with TeacherLedger(tmp_path, manifest(), profile=True) as ledger:
+        attempt = ledger.start_attempt("task-unsolved")
+        ledger.save_attempt(attempt, {"success": False, "termination_reason": "max_steps"}, status="max_steps")
+        ledger.mark_profile_unsolved("task-unsolved")
+        row = ledger.db.execute("SELECT status FROM attempts WHERE attempt_id=?", (attempt,)).fetchone()
+        assert row[0] == "profile_unsolved"
+        payload = json.loads((ledger.paths.attempts / f"{attempt}.json").read_text())
+        assert payload["status"] == "profile_unsolved"
+        assert payload["termination_reason"] == "profile_unsolved"

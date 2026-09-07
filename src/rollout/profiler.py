@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from env.teacher_env_client import TeacherEnvClient, TeacherEnvError
@@ -133,7 +134,12 @@ def _valid_visible_action(text: str) -> bool:
     # The remote service remains the source of truth for parsing.  This check
     # only identifies a malformed visible protocol before spending an env step.
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return any(line.lower().startswith("action:") and line.split(":", 1)[1].strip() for line in lines)
+    action_pattern = re.compile(r"^(search|click)\s*\[.+\]$", re.IGNORECASE | re.DOTALL)
+    return any(
+        line.lower().startswith("action:")
+        and bool(action_pattern.fullmatch(line.split(":", 1)[1].strip()))
+        for line in lines
+    )
 
 
 def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_health: Mapping[str, Any],
@@ -165,8 +171,18 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                  task_id: str, scenario: str, phase: str, attempt_index: int,
                  expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop) -> str:
     attempt_id = ledger.start_attempt(task_id, teacher_attempt=attempt_index)
+    session_id: str | None = None
     try:
         reset = env.reset(scenario, task_id)
+        session_id = reset.payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            ledger.save_attempt(attempt_id, {
+                "task_id": task_id, "scenario": scenario, "attempt_index": attempt_index,
+                "attempt_phase": phase, "termination_reason": "environment_failure",
+                "success": False, "observations": [], "actions": [],
+                "environment_error": "reset response missing session_id",
+            }, status="environment_failure")
+            return "environment_failure"
     except TeacherEnvError as exc:
         base = {"task_id": task_id, "scenario": scenario, "attempt_index": attempt_index,
                 "attempt_phase": phase, "termination_reason": "environment_failure",
@@ -234,7 +250,7 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 ledger.save_attempt(attempt_id, record, status="malformed_action")
                 return "malformed_action"
             try:
-                result = env.step(reset.payload["session_id"], response.text)
+                result = env.step(session_id, response.text)
             except TeacherEnvError as exc:
                 if getattr(exc, "kind", None) == "infrastructure":
                     ledger.mark_infrastructure_interrupted(attempt_id, {**record, "failure_class": "environment_infrastructure"})
@@ -289,6 +305,11 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
         ledger.save_attempt(attempt_id, record, status="max_steps")
         return "max_steps"
     finally:
+        if session_id is not None:
+            try:
+                env.release(session_id)
+            except Exception:  # best effort; the attempt artifact is authoritative
+                pass
         if guard.current_attempt_id == attempt_id:
             guard.current_attempt_id = None
 

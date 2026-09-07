@@ -72,9 +72,11 @@ def collect(root: Path, scenario: str) -> dict:
         "max_step_rate": sum(a.get("termination_reason") == "max_steps" for a in attempts) / len(attempts) if attempts else None,
         "api_latency_p50": percentile(api_latency, .5), "api_latency_p90": percentile(api_latency, .9), "api_latency_max": max(api_latency) if api_latency else None,
         "api_retries": sum(int(a.get("infrastructure_retries", 0) or 0) for a in attempts),
+        "api_retry_rate": (sum(int(a.get("infrastructure_retries", 0) or 0) > 0 for a in attempts) / len(attempts)) if attempts else None,
         "input_tokens": total_in, "output_tokens": total_out,
         "tokens_per_success": ((total_in + total_out) / len(success)) if success else None,
         "environment_latency_p50": percentile(env_latency, .5), "environment_latency_p90": percentile(env_latency, .9),
+        "environment_latency_max": max(env_latency) if env_latency else None,
         "infrastructure_interruptions": sum(a.get("status") == "infrastructure_interrupted" for a in attempts),
         "termination": term, "reward_metrics": {k: [a.get("reward_metrics", {}).get(k) for a in success if k in a.get("reward_metrics", {})] for k in ("r_succ", "r_strict", "r_loose")},
         "manifest_count": len(manifests),
@@ -84,13 +86,25 @@ def collect(root: Path, scenario: str) -> dict:
 def render(stats: list[dict]) -> str:
     lines = ["# P3a Teacher Profile", "", "本报告只聚合 `data/teacher_profile/` 中已存在的 profiling artifacts；不会填充或推断缺失数字。", "", "> P3a limits are operational profiling limits, not formal collection caps. Formal caps/diversity threshold remain a P3b decision.", ""]
     for item in stats:
-        lines += [f"## {item['scenario']}", "", f"- Tasks profiled: {item['tasks_profiled']}", f"- Total teacher attempts: {item['attempts']}", f"- First-attempt success rate: {fmt(item['first_attempt_success_rate'])}", f"- Success within 2/3 attempts: {fmt(item['success_within_2'])} / {fmt(item['success_within_3'])}", f"- Profile unsolved: {item['profile_unsolved']}", f"- Attempts per first success: {fmt(item['attempts_per_first_success'])}", f"- Second-success rate: {fmt(item['second_success_rate'])}", f"- Exact duplicate rate: {fmt(item['exact_duplicate_rate'])}", f"- Provisional near-duplicate trajectories: {item['near_duplicate_count']} / {item['trajectories']} (not a formal rule)", f"- Actions p50/p90/max: {fmt(item['action_p50'])} / {fmt(item['action_p90'])} / {fmt(item['action_max'])}", f"- Malformed / invalid / max-step rate: {fmt(item['malformed_rate'])} / {fmt(item['invalid_rate'])} / {fmt(item['max_step_rate'])}", f"- API latency p50/p90/max (s): {fmt(item['api_latency_p50'])} / {fmt(item['api_latency_p90'])} / {fmt(item['api_latency_max'])}", f"- API retries: {item['api_retries']}; input/output tokens: {item['input_tokens']} / {item['output_tokens']}; tokens/success: {fmt(item['tokens_per_success'])}", f"- Environment latency p50/p90 (s): {fmt(item['environment_latency_p50'])} / {fmt(item['environment_latency_p90'])}", f"- Infrastructure interruptions: {item['infrastructure_interruptions']}", f"- Termination types: `{json.dumps(item['termination'], ensure_ascii=False, sort_keys=True)}`", ""]
+        lines += [f"## {item['scenario']}", "", f"- Tasks profiled: {item['tasks_profiled']}", f"- Total teacher attempts: {item['attempts']}", f"- First-attempt success rate: {fmt(item['first_attempt_success_rate'])}", f"- Success within 2/3 attempts: {fmt(item['success_within_2'])} / {fmt(item['success_within_3'])}", f"- Profile unsolved: {item['profile_unsolved']}", f"- Attempts per first success: {fmt(item['attempts_per_first_success'])}", f"- Second-success rate: {fmt(item['second_success_rate'])}", f"- Exact duplicate rate: {fmt(item['exact_duplicate_rate'])}", f"- Provisional near-duplicate trajectories: {item['near_duplicate_count']} / {item['trajectories']} (not a formal rule)", f"- Actions p50/p90/max: {fmt(item['action_p50'])} / {fmt(item['action_p90'])} / {fmt(item['action_max'])}", f"- Malformed / invalid / max-step rate: {fmt(item['malformed_rate'])} / {fmt(item['invalid_rate'])} / {fmt(item['max_step_rate'])}", f"- API latency p50/p90/max (s): {fmt(item['api_latency_p50'])} / {fmt(item['api_latency_p90'])} / {fmt(item['api_latency_max'])}", f"- API retries: {item['api_retries']} (attempt retry rate: {fmt(item['api_retry_rate'])}); input/output tokens: {item['input_tokens']} / {item['output_tokens']}; tokens/success: {fmt(item['tokens_per_success'])}", f"- Environment latency p50/p90/max (s): {fmt(item['environment_latency_p50'])} / {fmt(item['environment_latency_p90'])} / {fmt(item['environment_latency_max'])}", f"- Infrastructure interruptions: {item['infrastructure_interruptions']}", f"- Termination types: `{json.dumps(item['termination'], ensure_ascii=False, sort_keys=True)}`", ""]
         reward_lines = []
         for metric in ("r_succ", "r_strict", "r_loose"):
             values = [float(v) for v in item["reward_metrics"].get(metric, []) if isinstance(v, (int, float))]
             reward_lines.append(f"{metric} p50/p90/max={fmt(percentile(values, .5))}/{fmt(percentile(values, .9))}/{fmt(max(values) if values else None)}")
         lines += [f"- Reward distributions: {'; '.join(reward_lines)}"]
-    lines += ["## Comparison", "", "上表按 scenario 独立呈现；只有当两个 scenario 都有 artifacts 时才比较，未运行的 scenario 保持 N/A。", "", "Cost: N/A — pricing not configured for the third-party relay.", ""]
+    lines += ["## Comparison", ""]
+    if len(stats) == 2 and all(item["manifest_count"] for item in stats):
+        lines += ["两个 scenario 的关键 profiling 指标：", "", "| Metric | single | single_persona |", "|---|---:|---:|"]
+        for key, label in (("tasks_profiled", "Tasks profiled"), ("attempts", "Attempts"),
+                           ("first_attempt_success_rate", "First-attempt success rate"),
+                           ("second_success_rate", "Second-success rate"),
+                           ("api_latency_p50", "API latency p50 (s)"),
+                           ("environment_latency_p50", "Environment latency p50 (s)")):
+            lines.append(f"| {label} | {fmt(stats[0].get(key))} | {fmt(stats[1].get(key))} |")
+        lines.append("")
+    else:
+        lines += ["两个 scenario 的对比将在各自 profiling artifacts 产生后显示；未运行的 scenario 保持 N/A。", ""]
+    lines += ["Cost: N/A — pricing not configured for the third-party relay.", ""]
     return "\n".join(lines)
 
 

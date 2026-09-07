@@ -15,6 +15,7 @@ class FakeEnv:
         self.resets = 0
         self.steps = 0
         self.fail = fail
+        self.releases = 0
 
     def reset(self, scenario, task_id):
         self.resets += 1
@@ -30,6 +31,10 @@ class FakeEnv:
         return EnvResult({"action": "click[p1]", "observation": "done", "done": True,
                           "reward": 1.0, "reward_detail": {"r_type": 1, "r_att": 1, "r_option": 1, "r_price": 1,
                           "query_match": False}, "purchase": {"asin": "p1"}, "goal": {}}, 0.02)
+
+    def release(self, session):
+        self.releases += 1
+        return EnvResult({"released": True}, 0.001)
 
 
 class FakeClient:
@@ -56,6 +61,7 @@ def test_successful_termination_and_fresh_reset(tmp_path):
         assert result == "success"
         assert len(list(ledger.paths.trajectories.glob("*.json"))) == 1
     assert env.resets == 1
+    assert env.releases == 1
 
 
 def test_max_action_steps_is_30(tmp_path):
@@ -74,6 +80,12 @@ def test_malformed_action_and_environment_failure_are_separate(tmp_path):
         guard = GracefulCollectionStop(ledger, "resume")
         assert _run_attempt(ledger=ledger, env=FakeEnv(), client=FakeClient("plain text"), task_id="t1", scenario="single",
                             phase="first_success", attempt_index=1, expected_model="model-a", logger=ProgressLogger(), guard=guard) == "malformed_action"
+    with TeacherLedger(tmp_path / "malformed", manifest(), profile=True) as ledger:
+        guard = GracefulCollectionStop(ledger, "resume")
+        env = FakeEnv()
+        assert _run_attempt(ledger=ledger, env=env, client=FakeClient("Thought only\nAction: foo"), task_id="t-malformed", scenario="single",
+                            phase="first_success", attempt_index=1, expected_model="model-a", logger=ProgressLogger(), guard=guard) == "malformed_action"
+        assert env.steps == 0
     with TeacherLedger(tmp_path / "e", manifest(), profile=True) as ledger:
         guard = GracefulCollectionStop(ledger, "resume")
         assert _run_attempt(ledger=ledger, env=FakeEnv(fail=True), client=FakeClient(), task_id="t2", scenario="single",

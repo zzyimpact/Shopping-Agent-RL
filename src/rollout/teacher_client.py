@@ -73,6 +73,10 @@ def _usage_value(usage: Mapping[str, Any], *names: str) -> int | None:
 
 
 def _content_from_response(data: Mapping[str, Any], style: str) -> str:
+    if not isinstance(data, Mapping):
+        raise TeacherClientError(
+            "teacher provider protocol error", kind="provider_protocol_error", retryable=True
+        )
     if style == "chat_completions":
         choices = data.get("choices")
         if isinstance(choices, list) and choices:
@@ -98,7 +102,7 @@ def _content_from_response(data: Mapping[str, Any], style: str) -> str:
         if chunks:
             return "".join(chunks)
     raise TeacherClientError(
-        "teacher response missing visible text", kind="teacher", retryable=False
+        "teacher provider protocol error", kind="provider_protocol_error", retryable=True
     )
 
 
@@ -217,11 +221,40 @@ class TeacherClient:
 
             try:
                 data = response.json()
-                text = _content_from_response(data, self.api_style)
             except (ValueError, json.JSONDecodeError) as exc:
+                protocol_error = TeacherClientError(
+                    "teacher provider protocol error", kind="provider_protocol_error", retryable=True,
+                    retries=retries,
+                )
+                if attempt < self.max_retries:
+                    retries += 1
+                    delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
+                    if self._on_retry:
+                        self._on_retry("provider protocol", retries, self.max_retries, delay)
+                    self._sleep(delay)
+                    continue
                 raise TeacherClientError(
-                    "teacher API returned invalid JSON", kind="teacher", retryable=False, retries=retries
+                    str(protocol_error), kind="provider_protocol_error", retryable=True, retries=retries
                 ) from exc
+            try:
+                text = _content_from_response(data, self.api_style)
+            except TeacherClientError as exc:
+                if exc.kind != "provider_protocol_error" or attempt >= self.max_retries:
+                    raise TeacherClientError(
+                        "teacher provider protocol error", kind="provider_protocol_error", retryable=True,
+                        retries=retries,
+                    ) from exc
+                retries += 1
+                delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
+                if self._on_retry:
+                    self._on_retry("provider protocol", retries, self.max_retries, delay)
+                self._sleep(delay)
+                continue
+            if not text.strip():
+                raise TeacherClientError(
+                    "teacher returned empty visible output", kind="teacher_empty_response",
+                    retryable=False, retries=retries,
+                )
             usage = data.get("usage") if isinstance(data, Mapping) else {}
             usage = usage if isinstance(usage, Mapping) else {}
             return TeacherResponse(

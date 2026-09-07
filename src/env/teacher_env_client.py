@@ -10,7 +10,10 @@ import httpx
 
 
 class TeacherEnvError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, kind: str = "environment", status_code: int | None = None):
+        super().__init__(message)
+        self.kind = kind
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -39,17 +42,21 @@ class TeacherEnvClient:
         try:
             response = self.client.request(method, self.base_url + path, json=payload)
         except httpx.RequestError as exc:
-            raise TeacherEnvError("ShopSimulator endpoint unavailable") from exc
+            raise TeacherEnvError("ShopSimulator endpoint unavailable", kind="infrastructure") from exc
         if response.status_code >= 400:
             try:
                 detail = response.json().get("error", "remote error")
             except ValueError:
                 detail = "remote error"
-            raise TeacherEnvError(f"ShopSimulator HTTP {response.status_code}: {detail}")
+            kind = "invalid_action" if str(detail) in {"invalid_action", "malformed_action"} else "environment"
+            raise TeacherEnvError(f"ShopSimulator HTTP {response.status_code}: {detail}", kind=kind,
+                                  status_code=response.status_code)
         try:
             body = response.json()
         except ValueError as exc:
-            raise TeacherEnvError("ShopSimulator returned invalid JSON") from exc
+            raise TeacherEnvError("ShopSimulator returned invalid JSON", kind="infrastructure") from exc
+        if not isinstance(body, dict):
+            raise TeacherEnvError("ShopSimulator returned invalid JSON", kind="infrastructure")
         return EnvResult(body, time.monotonic() - started)
 
     def health(self) -> EnvResult:

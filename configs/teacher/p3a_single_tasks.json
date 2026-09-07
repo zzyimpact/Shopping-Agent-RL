@@ -1,0 +1,206 @@
+{
+  "metadata": {
+    "purpose": "p3a_profiling",
+    "scenario": "single",
+    "count": 24,
+    "seed": 1,
+    "source_manifest": "sft_task_manifest_single.json",
+    "source_manifest_sha256": "f51c33217061479f9c95a1068621fcd38e4883ae3d2f6a1627037bea934f2125",
+    "sampling": "same proportional largest-remainder allocation by (domain, category) as P2; deterministic Random(seed+stratum_offset)",
+    "task_ids_sha256": "1b1176d3863b4707c2ff698ad1bf464420eda6381117f1a584bcdfd94c68addd"
+  },
+  "tasks": [
+    {
+      "task_id": "745584327849",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 1819,
+      "domain": "家居家装",
+      "category": "住宅家具›儿童家具›儿童椅›儿童学习椅"
+    },
+    {
+      "task_id": "689095595880",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 2666,
+      "domain": "休闲娱乐文教",
+      "category": "商业/办公家具›美妆家具›化妆品货架"
+    },
+    {
+      "task_id": "930026158309",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 3434,
+      "domain": "家居家装",
+      "category": "家装主材›卫浴五金›卫浴五金/挂件›美容镜"
+    },
+    {
+      "task_id": "38157104987",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 6750,
+      "domain": "家居家装",
+      "category": "基础建材›涂料（乳胶漆）›特种涂料"
+    },
+    {
+      "task_id": "802546101141",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 7094,
+      "domain": "家居家装",
+      "category": "家居饰品›花瓶/花器/仿真花/仿真饰品›仿真花/假花"
+    },
+    {
+      "task_id": "938572596417",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 8063,
+      "domain": "服饰鞋包饰品",
+      "category": "箱包皮具/热销女包/男包›女士包袋新›手拿包"
+    },
+    {
+      "task_id": "899808710001",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 8459,
+      "domain": "生产材料农用品",
+      "category": "鲜花速递/花卉仿真/绿植园艺›种子/种苗/球根›种苗/半成品盆栽"
+    },
+    {
+      "task_id": "681783199335",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 10282,
+      "domain": "家居家装",
+      "category": "住宅家具›床类›床架/床板"
+    },
+    {
+      "task_id": "717232398263",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 11355,
+      "domain": "休闲娱乐文教",
+      "category": "电玩/配件/游戏/攻略›游戏手柄"
+    },
+    {
+      "task_id": "903808936653",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 11434,
+      "domain": "休闲娱乐文教",
+      "category": "模玩/动漫/周边/娃圈三坑/桌游›Cosplay服饰/道具/服务›Cosplay男装/cos男装"
+    },
+    {
+      "task_id": "913721409402",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 13294,
+      "domain": "服饰鞋包饰品",
+      "category": "黄金›IP联名黄金›IP联名定价黄金›定价IP联名黄金手链"
+    },
+    {
+      "task_id": "921111560004",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 14065,
+      "domain": "家居家装",
+      "category": "家装灯饰光源›室外灯饰›柱头灯"
+    },
+    {
+      "task_id": "843140391356",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 14158,
+      "domain": "休闲娱乐文教",
+      "category": "模玩/动漫/周边/娃圈三坑/桌游›古风/国风服装›古风/国风套装"
+    },
+    {
+      "task_id": "797953884670",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 14611,
+      "domain": "家居家装",
+      "category": "居家日用›防护用品›护膝/护腰/护肩/护颈"
+    },
+    {
+      "task_id": "819841250315",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 16016,
+      "domain": "休闲娱乐文教",
+      "category": "特色手工艺›地区民间特色手工艺›刀剑相关›刀剑"
+    },
+    {
+      "task_id": "924162520510",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 16409,
+      "domain": "休闲娱乐文教",
+      "category": "节庆用品/礼品›文化创意用品›文化衫"
+    },
+    {
+      "task_id": "624159160918",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 17654,
+      "domain": "休闲娱乐文教",
+      "category": "文具电教/文化用品/商务用品›画具/画材用品›水彩笔"
+    },
+    {
+      "task_id": "904644781114",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 18403,
+      "domain": "休闲娱乐文教",
+      "category": "ZIPPO/瑞士军刀/眼镜›功能眼镜›防蓝光镜"
+    },
+    {
+      "task_id": "835272061537",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 18414,
+      "domain": "生产材料农用品",
+      "category": "农用物资›农药›杀菌剂"
+    },
+    {
+      "task_id": "941007510366",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 19279,
+      "domain": "运动户外交通",
+      "category": "汽车用品/电子/清洗/改装›汽车加装›汽车氛围灯/装饰灯/日行灯"
+    },
+    {
+      "task_id": "761341816374",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 19703,
+      "domain": "服饰鞋包饰品",
+      "category": "女鞋›时装单鞋›婚鞋"
+    },
+    {
+      "task_id": "940895654982",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 22094,
+      "domain": "服饰鞋包饰品",
+      "category": "女装/女士精品›唐装/民族服装/舞台服装›唐装/中式服装›上衣"
+    },
+    {
+      "task_id": "845250063748",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 22526,
+      "domain": "家居家装",
+      "category": "家装灯饰光源›其它灯具灯饰"
+    },
+    {
+      "task_id": "632290461063",
+      "scenario": "single",
+      "official_split": "train",
+      "source_index": 22558,
+      "domain": "服饰鞋包饰品",
+      "category": "黄金›黄金首饰（新）›小克重定价黄金›小克重定价黄金吊坠"
+    }
+  ]
+}

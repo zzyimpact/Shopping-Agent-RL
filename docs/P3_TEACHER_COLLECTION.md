@@ -1,6 +1,7 @@
 # P3 Teacher Collection（P3-0 基础设施）
 
-**状态**：P3-0 完成；尚未开始 P3a profiling 或正式 collection。本文只定义基础设施和已经批准的 collection policy。
+**状态**：P3-0 完成；P3a profiler 已实现并等待用户手动执行真实 profiling。本文不表示
+P3a 结果或正式 collection 已完成。
 
 ## 1. 架构
 
@@ -18,6 +19,12 @@ ShopSimulator、Lucene、Pyserini、Java、spaCy、Catalog runtime 不在本地�
 复制 `.env.teacher.example` 为 `.env.teacher`，仅在本地填写 `TEACHER_API_URL`、`TEACHER_API_KEY`、`TEACHER_API_MODEL` 和 `TEACHER_API_STYLE`。支持 `chat_completions` 与 `responses` 两种 OpenAI-compatible adapter；relay model identifier 不写死在代码中。`.env.teacher` 被 Git 忽略，key 不进入异常、日志、manifest 或测试 fixture。
 
 默认 runtime engineering 参数：connect timeout 15 秒、read timeout 300 秒、初始请求之外最多 3 次 retry。408/429/500/502/503/504、连接错误和 timeout 使用 2/5/10 秒级 backoff（含少量 jitter），优先遵守 `Retry-After`。400/401/403/404/422 属于 request/config failure，不盲目重试。正常 HTTP 响应但 malformed action 或最终失败属于 teacher/model failure，才计 teacher attempt。
+
+HTTP 200 但 invalid JSON、缺少 expected protocol structure 或没有可解析 visible text 的
+provider response 统一归类为 `provider_protocol_error`：按 transient policy retry，耗尽后
+停止整个 profiler、保存状态且不消耗 teacher attempt。协议正常但 visible output 为空则是
+`teacher_empty_response`，属于 teacher/model failure。provider response body 不写入异常、日志
+或 artifacts。
 
 retry 耗尽时，collector 必须 flush 当前状态、标记 `infrastructure_interrupted` 并停止整个 collection；不消耗 task attempt quota。终端提示已保留数据和 `--resume` 命令。
 
@@ -63,8 +70,37 @@ P3c   Formal collection
 P3d   Dataset freeze
 ```
 
-本轮明确不执行真实 teacher request、批量 trajectory、SFT formatter/training、GRPO、GPU 或模型 inference。
+P3a 的固定 profiling plan 为每个 scenario 24 条 TRAIN task（seed=1，来自冻结 primary SFT
+manifest），first-success 每 task 最多 3 次尝试，成功后最多 2 次 second-demo exploration，
+`max_action_steps=30`，单 worker。这些只是观察 teacher 行为的 operational limits，不是
+P3c formal collection caps；P3b 才根据结果冻结 attempt cap、reserve 与 diversity threshold。
+P3a 使用 `data/teacher_profile/<scenario>/<run_id>/` 的 `trajectories/`，与正式的
+`data/teacher_raw/` 物理隔离；profiling artifacts 永远不会直接进入 SFT。
+
+Prompt/rollout 使用 remote `web_agent_text_env.py` 返回的 exact upstream prompt/source/hash、
+当前 persona 和 observation；每次 API 请求发送完整 visible history，teacher 只返回可见
+`Thought:`/`Action:` protocol。第二次 rollout fresh reset 且不提供第一条 trajectory，不做
+diversity-conditioned prompting，不保存 hidden chain-of-thought。
+
+本轮明确不执行真实 teacher request、批量 trajectory、SFT formatter/training、GRPO、GPU 或模型 inference；
+用户完成两个 scenario 后，再用 `scripts/summarize_teacher_profile.py` 生成真实报告供 P3b 分析。
 
 ## 7. Backup
 
 `bash scripts/sync_teacher_data.sh [--dry-run]` 使用 rsync 从本地 `data/teacher_raw/` 增量同步至 `rtx-pro-6000-3:/root/data/shopsim/teacher_raw/`，不使用 `--delete`，不传输 `.env.teacher`，失败不会修改本地 canonical data。
+
+## 8. P3a user-triggered profiling
+
+完成本地 `.env.teacher` 配置并确认 relay 后，由用户手动执行：
+
+```bash
+bash scripts/teacher_env_up.sh
+python3 scripts/profile_teacher.py --scenario single
+python3 scripts/profile_teacher.py --scenario single_persona
+python3 scripts/summarize_teacher_profile.py
+bash scripts/teacher_env_down.sh
+```
+
+如果 infrastructure interruption，已完成的 profiling artifact 会保留；检查 API 后仅
+对相应 scenario 使用 `python3 scripts/profile_teacher.py --scenario <scenario> --resume`。
+P3a 不自动调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。

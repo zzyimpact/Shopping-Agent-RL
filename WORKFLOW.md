@@ -14,8 +14,8 @@
 Codex：实现 / 复用 / 测试 / 汇报 / branch、commit、push、正常 merge
 用户：审阅阶段输出、重要实验结果、重要设计/分析文档和项目级 open decisions
 Git：唯一代码 source of truth
-本地电脑：大模型下载、大文件高速中转
-远程 CPU：环境、数据、ShopSimulator、teacher API、profiling、分析
+本地电脑：teacher API controller、collection、monitoring；大模型下载/大文件中转仍由用户负责
+远程 CPU：ShopSimulator、search、reward、environment、数据与 profiling 支撑
 远程 GPU：Base inference、SFT、GRPO、正式 evaluation
 ```
 
@@ -286,6 +286,13 @@ P3-0 不调用真实 teacher API、不批量采集 trajectory、不生成 SFT �
 P3-0 通过后再用单 worker 做小规模 profiling，测 teacher success rate、actions/trajectory、
 API token/cost、environment latency 和 attempts/success。此阶段才冻结 exact relay
 model identifier、generation 参数、attempt cap 与 diversity threshold。
+
+当前 P3a 仅使用每个 scenario 24 条、来自冻结 primary SFT TRAIN manifest 的 deterministic
+profiling tasks（seed=1）。每 task 的 first-success 最多 3 次尝试，取得第一条 success 后
+再做最多 2 次独立 second-demo exploration；`max_action_steps=30`、单 worker。上述数字仅是
+profiling operational limits，**不是**正式 collection caps；formal attempt cap、reserve
+策略和 diversity threshold 留到 P3b 根据真实 profiling 结果冻结。P3a 输出物理隔离于
+`data/teacher_raw/`，不得直接进入 SFT。
 
 ## 9.3 P3b Collection policy freeze
 

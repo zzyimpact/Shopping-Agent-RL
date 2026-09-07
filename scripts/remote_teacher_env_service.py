@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -88,10 +89,22 @@ def reset():
         observation, _ = env.reset(idx=0)
         session_id = uuid.uuid4().hex
         active.update({"env": env, "session_id": session_id, "task_id": task_id, "scenario": scenario})
+        system_prompt = str(env.prompt_template)
+        policy_context = {
+            "system_prompt": system_prompt,
+            "source": "shop_env/web_agent_site/envs/web_agent_text_env.py",
+            "prompt_hash": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest(),
+        }
+        if scenario == "single_persona":
+            persona = getattr(env, "user_persona", None)
+            if not isinstance(persona, dict):
+                persona = env.server.goals[0].get("user_persona")
+            policy_context["user_persona"] = dict(persona or {})
         return jsonify({
             "session_id": session_id, "task_id": task_id, "scenario": scenario,
             "observation": observation, "available_actions": env.get_available_actions(),
-            "instruction": env.instruction_text,
+            "instruction": env.instruction_text, "policy_context": policy_context,
+            "environment_version": "task-scoped-v1", "reward_deviation_version": "query-match-false-v1",
         })
     except Exception as exc:
         close_active()
@@ -109,11 +122,19 @@ def step():
         return jsonify({"error": "response must be text"}), 400
     try:
         from shop_agent import _extract_action_from_response
+        from web_agent_site.engine.engine import parse_action
         action = _extract_action_from_response(response.replace("\\n", "\n"))
+        action_name, action_arg = parse_action(action)
+        normalized_name = str(action_name).strip().lower()
+        normalized_arg = str(action_arg or "").strip().lower()
+        if normalized_name not in {"search", "click"} or not normalized_arg:
+            return jsonify({"error": "malformed_action"}), 422
         observation, status, _ = active["env"].step(action)
         result = {
             "session_id": active["session_id"], "action": action, "observation": observation,
-            "available_actions": active["env"].get_available_actions(), **status,
+            "available_actions": active["env"].get_available_actions(),
+            "action_valid": normalized_name == "search" or (normalized_arg != "search" and normalized_arg in active["env"].text_to_clickable),
+            **status,
         }
         return jsonify(result)
     except Exception as exc:

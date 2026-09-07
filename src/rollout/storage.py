@@ -54,6 +54,7 @@ class RunPaths:
     manifest: Path
     database: Path
     accepted: Path
+    trajectories: Path
     attempts: Path
     logs: Path
 
@@ -61,7 +62,8 @@ class RunPaths:
 class TeacherLedger:
     """单个 run 的持久化账本；不会把 partial attempt 当作 accepted。"""
 
-    def __init__(self, data_root: str | Path, manifest: Mapping[str, Any], *, resume: bool = False):
+    def __init__(self, data_root: str | Path, manifest: Mapping[str, Any], *, resume: bool = False,
+                 extra_immutable_fields: tuple[str, ...] = (), profile: bool = False):
         required = {"run_id", *IMMUTABLE_FIELDS}
         missing = required - manifest.keys()
         if missing:
@@ -69,20 +71,30 @@ class TeacherLedger:
         scenario = str(manifest["scenario"])
         run_id = str(manifest["run_id"])
         root = Path(data_root) / scenario / run_id
+        self.extra_immutable_fields = tuple(extra_immutable_fields)
+        required.update(self.extra_immutable_fields)
+        missing = required - manifest.keys()
+        if missing:
+            raise ValueError(f"run manifest 缺少字段: {', '.join(sorted(missing))}")
         self.paths = RunPaths(
             root=root, manifest=root / "run_manifest.json", database=root / "state.sqlite",
-            accepted=root / "accepted", attempts=root / "attempts", logs=root / "logs",
+            accepted=root / "accepted", trajectories=root / "trajectories",
+            attempts=root / "attempts", logs=root / "logs",
         )
-        for directory in (self.paths.accepted, self.paths.attempts, self.paths.logs):
+        self.profile = profile
+        artifact_directory = self.paths.trajectories if profile else self.paths.accepted
+        for directory in (artifact_directory, self.paths.attempts, self.paths.logs):
             directory.mkdir(parents=True, exist_ok=True)
         desired = dict(manifest)
         desired.setdefault("created_at", utc_now())
-        desired["immutable_config_hash"] = canonical_hash({k: desired[k] for k in IMMUTABLE_FIELDS})
+        hash_fields = (*IMMUTABLE_FIELDS, *self.extra_immutable_fields)
+        desired["immutable_config_hash"] = canonical_hash({k: desired[k] for k in hash_fields})
         if self.paths.manifest.exists():
             if not resume:
                 raise FileExistsError(f"run 已存在；请使用 --resume: {root}")
             existing = json.loads(self.paths.manifest.read_text(encoding="utf-8"))
-            mismatched = [k for k in IMMUTABLE_FIELDS if existing.get(k) != desired.get(k)]
+            compared_fields = (*IMMUTABLE_FIELDS, *self.extra_immutable_fields)
+            mismatched = [k for k in compared_fields if existing.get(k) != desired.get(k)]
             if mismatched:
                 raise ResumeConfigMismatch(
                     "拒绝 resume：immutable config 不一致: " + ", ".join(mismatched)
@@ -155,6 +167,26 @@ class TeacherLedger:
             )
         return path
 
+    def save_progress(self, attempt_id: str, record: Mapping[str, Any]) -> Path:
+        """Durably update an in-progress attempt without marking it finished."""
+        row = self.db.execute(
+            "SELECT task_id, started_at, artifact_path, teacher_attempt FROM attempts WHERE attempt_id=?",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(attempt_id)
+        task_id, started_at, relative_path, teacher_attempt = row
+        complete = dict(record)
+        complete.update({
+            "attempt_id": attempt_id, "task_id": task_id,
+            "scenario": self.manifest["scenario"], "status": "in_progress",
+            "teacher_attempt": teacher_attempt, "started_at": started_at,
+        })
+        atomic_json(self.paths.root / relative_path, complete)
+        with self.db:
+            self.db.execute("UPDATE attempts SET status='in_progress' WHERE attempt_id=?", (attempt_id,))
+        return self.paths.root / relative_path
+
     def accept(self, attempt_id: str, trajectory: Mapping[str, Any]) -> Path:
         """先发布 accepted JSON，随后在一个 SQLite transaction 中标记。"""
         row = self.db.execute(
@@ -182,11 +214,65 @@ class TeacherLedger:
             )
         return path
 
+    def save_trajectory(self, attempt_id: str, trajectory: Mapping[str, Any], *, status: str = "success") -> Path:
+        """Persist a profiling trajectory without giving it formal ``accepted`` status."""
+        if not self.profile:
+            raise RuntimeError("save_trajectory 仅用于 profiling ledger")
+        row = self.db.execute(
+            "SELECT task_id FROM attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(attempt_id)
+        path = self.paths.trajectories / f"{attempt_id}.json"
+        payload = dict(trajectory)
+        payload.update({
+            "attempt_id": attempt_id, "task_id": row[0],
+            "scenario": self.manifest["scenario"],
+            "profiling_status": status, "saved_at": utc_now(),
+        })
+        if path.exists():
+            raise FileExistsError(f"拒绝覆盖已存在 profiling trajectory: {path}")
+        atomic_json(path, payload)
+        with self.db:
+            self.db.execute(
+                "UPDATE attempts SET status=?, artifact_path=?, finished_at=? WHERE attempt_id=?",
+                (status, str(path.relative_to(self.paths.root)), payload["saved_at"], attempt_id),
+            )
+        return path
+
+    def completed_task_ids(self) -> set[str]:
+        rows = self.db.execute(
+            "SELECT DISTINCT task_id FROM attempts WHERE status IN "
+            "('success','profile_unsolved','teacher_failure','malformed_action','invalid_action','environment_failure','max_steps')"
+        ).fetchall()
+        return {str(row[0]) for row in rows}
+
+    def mark_profile_unsolved(self, task_id: str) -> None:
+        """Mark the last completed teacher attempt as the profiling terminal outcome."""
+        row = self.db.execute(
+            "SELECT attempt_id FROM attempts WHERE task_id=? AND status != 'infrastructure_interrupted' "
+            "ORDER BY rowid DESC LIMIT 1", (task_id,)
+        ).fetchone()
+        if row:
+            with self.db:
+                self.db.execute("UPDATE attempts SET status='profile_unsolved' WHERE attempt_id=?", (row[0],))
+
     def mark_infrastructure_interrupted(self, attempt_id: str, record: Mapping[str, Any]) -> Path:
         return self.save_attempt(attempt_id, record, status="infrastructure_interrupted")
 
     def accepted_count(self) -> int:
         return int(self.db.execute("SELECT COUNT(*) FROM accepted").fetchone()[0])
+
+    def set_state(self, key: str, value: str) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO run_state(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value)
+            )
+
+    def get_state(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM run_state WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row else None
 
     def close(self) -> None:
         if not self.closed:

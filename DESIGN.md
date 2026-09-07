@@ -537,6 +537,15 @@ hard constraint。优先级为 `Success > behavior quality > task coverage > div
 stratum 的 deterministic reserve replacement。具体 attempt cap、similarity threshold
 和 teacher relay model identifier 在 P3a profiling 后再冻结。
 
+P3a profiling 使用本地单 worker teacher controller 与 remote CPU ShopSimulator，通过 SSH
+tunnel 连接；每个 scenario 从冻结的 3,000 条 primary SFT TRAIN manifest 中以 seed=1
+确定性抽取 24 条 task。profiling-only operational limits 为 first-success 每 task 最多 3
+次尝试、成功后的 second-demo 最多 2 次尝试、每 episode `max_action_steps=30`。这些限制
+不是正式 collection caps；formal attempt cap、reserve replacement 和 diversity threshold
+必须在 P3b 根据真实结果决定。当前 public snapshot 若缺少 query，项目 compatibility
+semantics 固定为 `query_match=False`，该 reproduction deviation 可能影响 r_type/Rcategory
+边界情形，正式结果须报告。
+
 Teacher 仅使用 visible `Thought: 简短 action rationale` 与 `Action:` protocol，不获取
 hidden chain-of-thought；prompt 优先复用 upstream Single/Persona system prompt、
 `user_persona`（Persona）及完整 visible conversation history。上述 policy 记录于

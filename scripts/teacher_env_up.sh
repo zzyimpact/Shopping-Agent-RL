@@ -13,6 +13,13 @@ TUNNEL_LOG="${STATE_DIR}/tunnel.log"
 REMOTE_OWNED_FILE="${STATE_DIR}/remote_service_owned"
 mkdir -p "${STATE_DIR}"
 
+# The service is project-owned (not ShopSimulator upstream).  Sync this one
+# tracked file so a remote checkout that predates the current branch still
+# exposes the policy_context contract required by the profiler.  No catalog,
+# model, secret, or generated artifact is transferred.
+scp -q "${PROJECT_ROOT}/scripts/remote_teacher_env_service.py" \
+  "${REMOTE_HOST}:${REMOTE_PROJECT}/scripts/remote_teacher_env_service.py"
+
 cleanup_failed_start() {
   if [[ -f "${TUNNEL_PID_FILE}" ]]; then
     local pid

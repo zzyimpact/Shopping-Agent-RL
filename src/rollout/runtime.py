@@ -27,11 +27,11 @@ def generate_or_interrupt(
     try:
         return client.generate(messages)
     except TeacherClientError as exc:
-        if exc.kind != "infrastructure":
+        if exc.kind not in {"infrastructure", "provider_protocol_error"}:
             raise
         ledger.mark_infrastructure_interrupted(
             attempt_id,
-            {**partial_record, "failure_class": "infrastructure", "retries": exc.retries},
+            {**partial_record, "failure_class": exc.kind, "retries": exc.retries},
         )
         ledger.close()
         (logger or ProgressLogger()).infrastructure_stop(resume_command)

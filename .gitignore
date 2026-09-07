@@ -34,6 +34,9 @@ experiments/*/
 *.log
 *.sqlite
 *.sqlite-*
+# P3a generated profiling artifacts remain local and are never committed.
+/data/teacher_profile/
+/data/teacher_raw/
 
 # Caches and temporary files
 .cache/

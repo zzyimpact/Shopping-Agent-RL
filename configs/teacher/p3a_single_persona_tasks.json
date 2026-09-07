@@ -1,0 +1,206 @@
+{
+  "metadata": {
+    "purpose": "p3a_profiling",
+    "scenario": "single_persona",
+    "count": 24,
+    "seed": 1,
+    "source_manifest": "sft_task_manifest_single_persona.json",
+    "source_manifest_sha256": "f51c33217061479f9c95a1068621fcd38e4883ae3d2f6a1627037bea934f2125",
+    "sampling": "same proportional largest-remainder allocation by (domain, category) as P2; deterministic Random(seed+stratum_offset)",
+    "task_ids_sha256": "7be46d1df477cec1222b19a75d20c66c1807dd2e28b0df047adbfacef79033ec"
+  },
+  "tasks": [
+    {
+      "task_id": "934909004241",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 1617,
+      "domain": "服饰鞋包饰品",
+      "category": "珠宝/钻石/翡翠›黄金镶嵌首饰›黄金镶宝石›黄金镶宝石戒指"
+    },
+    {
+      "task_id": "895516447505",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 1691,
+      "domain": "服饰鞋包饰品",
+      "category": "服饰配件/皮带/帽子/围巾›制衣面料›毛线"
+    },
+    {
+      "task_id": "652382546234",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 1975,
+      "domain": "家用电器数码",
+      "category": "影音电器›家庭影院配件"
+    },
+    {
+      "task_id": "706570359072",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2014,
+      "domain": "家用电器数码",
+      "category": "大家电›移动空调"
+    },
+    {
+      "task_id": "828977346215",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2121,
+      "domain": "服饰鞋包饰品",
+      "category": "饰品/流行首饰/时尚饰品新›木作制品›崖柏"
+    },
+    {
+      "task_id": "933047766034",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2126,
+      "domain": "家居家装",
+      "category": "居家日用›防护用品›护膝/护腰/护肩/护颈"
+    },
+    {
+      "task_id": "930893835926",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2217,
+      "domain": "生产材料农用品",
+      "category": "农机/农具/农膜›喷灌/滴灌设备›喷头"
+    },
+    {
+      "task_id": "749823538017",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2389,
+      "domain": "休闲娱乐文教",
+      "category": "模玩/动漫/周边/娃圈三坑/桌游›古风/国风服装›古风/国风套装"
+    },
+    {
+      "task_id": "835037261593",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2493,
+      "domain": "服饰鞋包饰品",
+      "category": "女鞋›汉服鞋/绣花鞋/传统布鞋›绣花鞋"
+    },
+    {
+      "task_id": "757758605212",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2753,
+      "domain": "美妆个护健康",
+      "category": "彩妆/香水/美妆工具›面部彩妆›隔离/妆前/素颜霜"
+    },
+    {
+      "task_id": "721504325819",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2755,
+      "domain": "家居家装",
+      "category": "居家布艺›窗帘门帘及配件›定制窗帘"
+    },
+    {
+      "task_id": "776330925797",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 2937,
+      "domain": "休闲娱乐文教",
+      "category": "书籍/杂志/报纸›进口原版书(含港台)›原版其它"
+    },
+    {
+      "task_id": "902402016730",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3011,
+      "domain": "服饰鞋包饰品",
+      "category": "运动服/休闲服装›运动内衣›运动内衣套装"
+    },
+    {
+      "task_id": "924597233991",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3174,
+      "domain": "服饰鞋包饰品",
+      "category": "珠宝/钻石/翡翠›小众天然玉石›珊瑚"
+    },
+    {
+      "task_id": "735545097378",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3304,
+      "domain": "生产材料农用品",
+      "category": "农用物资›农药›杀菌剂"
+    },
+    {
+      "task_id": "847887658482",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3511,
+      "domain": "休闲娱乐文教",
+      "category": "特色手工艺›地区民间特色手工艺›刀剑相关›刀剑"
+    },
+    {
+      "task_id": "808224624940",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3872,
+      "domain": "休闲娱乐文教",
+      "category": "办公设备/耗材/相关服务›其他打印设备›针式票据打印机"
+    },
+    {
+      "task_id": "687793449744",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 3952,
+      "domain": "美妆个护健康",
+      "category": "彩妆/香水/美妆工具›唇部彩妆›唇彩/唇蜜/唇釉/唇泥/唇霜"
+    },
+    {
+      "task_id": "904385584071",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4106,
+      "domain": "服饰鞋包饰品",
+      "category": "箱包皮具/热销女包/男包›胸包"
+    },
+    {
+      "task_id": "727134375132",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4189,
+      "domain": "服饰鞋包饰品",
+      "category": "箱包皮具/热销女包/男包›女士包袋新›手拿包"
+    },
+    {
+      "task_id": "796568998890",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4196,
+      "domain": "休闲娱乐文教",
+      "category": "书籍/杂志/报纸›考试/教材/教辅/论文›建筑工程类职称考试›全国一级建造师考试"
+    },
+    {
+      "task_id": "631405227503",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4515,
+      "domain": "食品饮品",
+      "category": "酒类›其他酒类"
+    },
+    {
+      "task_id": "906953230535",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4531,
+      "domain": "休闲娱乐文教",
+      "category": "电玩/配件/游戏/攻略›游戏手柄"
+    },
+    {
+      "task_id": "872407057492",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 4625,
+      "domain": "生产材料农用品",
+      "category": "农用物资›农用/环境用卫生农药"
+    }
+  ]
+}

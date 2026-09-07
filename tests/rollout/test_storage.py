@@ -65,3 +65,22 @@ def test_ctrl_c_flushes_partial_and_prints_resume(tmp_path):
     assert guard.stop_requested is True
     assert record["status"] == "infrastructure_interrupted"
     assert "Resume with:" in output.getvalue()
+
+
+def test_profile_storage_is_separate_from_formal_teacher_raw(tmp_path):
+    with TeacherLedger(tmp_path / "teacher_profile", manifest(), profile=True) as ledger:
+        attempt = ledger.start_attempt("task-profile")
+        ledger.save_attempt(attempt, {"success": True}, status="success")
+        path = ledger.save_trajectory(attempt, {"success": True}, status="success")
+        assert path.parent.name == "trajectories"
+        assert not (tmp_path / "teacher_raw").exists()
+    with TeacherLedger(tmp_path / "teacher_profile", manifest(), profile=True, resume=True) as resumed:
+        assert resumed.completed_task_ids() == {"task-profile"}
+
+
+def test_profile_extra_immutable_fields_refuse_resume(tmp_path):
+    values = manifest(purpose="p3a_profiling", selected_task_list_hash="a")
+    TeacherLedger(tmp_path, values, profile=True, extra_immutable_fields=("purpose", "selected_task_list_hash")).close()
+    with pytest.raises(ResumeConfigMismatch, match="selected_task_list_hash"):
+        TeacherLedger(tmp_path, manifest(purpose="p3a_profiling", selected_task_list_hash="b"), profile=True,
+                      resume=True, extra_immutable_fields=("purpose", "selected_task_list_hash"))

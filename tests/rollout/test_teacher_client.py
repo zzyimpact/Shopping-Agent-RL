@@ -86,3 +86,29 @@ def test_responses_style_parsing():
         result = client.generate([{"role": "user", "content": "x"}])
     assert result.text == "可见输出"
     assert result.input_tokens == 5
+
+
+@pytest.mark.parametrize("body", ["not-json", "{}", '{"choices": []}'])
+def test_http_200_protocol_error_is_retryable_and_redacted(body):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, request=request, text=body)
+    with client_for(handler, max_retries=2) as client, pytest.raises(TeacherClientError) as caught:
+        client.generate([{"role": "user", "content": "x"}])
+    assert caught.value.kind == "provider_protocol_error"
+    assert caught.value.retries == 2
+    assert body not in str(caught.value)
+    assert len(calls) == 3
+
+
+def test_empty_visible_output_is_teacher_failure_without_retry():
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, request=request, json={"model": "actual", "choices": [{"message": {"content": ""}}]})
+    with client_for(handler, max_retries=3) as client, pytest.raises(TeacherClientError) as caught:
+        client.generate([{"role": "user", "content": "x"}])
+    assert caught.value.kind == "teacher_empty_response"
+    assert caught.value.retries == 0
+    assert len(calls) == 1

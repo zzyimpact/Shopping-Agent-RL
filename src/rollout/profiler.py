@@ -144,7 +144,7 @@ def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_
         "teacher_model": cfg["TEACHER_API_MODEL"], "api_style": cfg["TEACHER_API_STYLE"],
         "reasoning_effort": cfg["TEACHER_REASONING_EFFORT"], "system_prompt_hash": context_hash,
         "upstream_prompt_hash": context_hash, "selected_task_list_hash": metadata.get("task_ids_sha256"),
-        "source_sft_manifest_hash": metadata.get("source_manifest_sha256"),
+        "source_sft_manifest_hash": metadata.get("source_primary_manifest_sha256") or metadata.get("source_manifest_sha256"),
         "collection_config_hash": canonical_hash({"scenario": scenario, "seed": metadata.get("seed"), "limits": PROFILE_LIMITS}),
         "shopsim_source_fingerprint": env_health.get("source_fingerprint", "unknown"),
         "environment_fingerprint": env_health.get("source_fingerprint", "unknown"),

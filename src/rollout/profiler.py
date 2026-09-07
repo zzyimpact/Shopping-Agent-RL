@@ -112,9 +112,11 @@ def _find_resume_run(
                 db.close()
                 incompatible.append(directory.name)
                 continue
-            latest = db.execute("SELECT status FROM attempts ORDER BY rowid DESC LIMIT 1").fetchone()
+            had_infrastructure_stop = db.execute(
+                "SELECT 1 FROM attempts WHERE status='infrastructure_interrupted' LIMIT 1"
+            ).fetchone()
             status_text = str(state[0]) if state else (
-                "infrastructure_interrupted" if latest and latest[0] == "infrastructure_interrupted" else "incomplete"
+                "infrastructure_interrupted" if had_infrastructure_stop else "incomplete"
             )
             attempts = int(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0])
             touched = int(db.execute("SELECT COUNT(DISTINCT task_id) FROM attempts").fetchone()[0])

@@ -53,8 +53,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _task_ids_hash(task_ids: list[str]) -> str:
-    return hashlib.sha256("\n".join(task_ids).encode("utf-8")).hexdigest()
+def _task_ids_hash(task_ids: list[str], *, trailing_newline: bool = False) -> str:
+    """Hash the frozen ID sequence using the manifest's line serialization.
+
+    Early P3a task-list generation used ``printf '%s\\n'`` (a final newline),
+    while the P2 helper hashes ``"\\n".join(ids)`` without one.  Both are
+    deterministic representations of the already-frozen IDs; accept either so
+    validation does not force a task-list rewrite or re-sampling.
+    """
+    serialized = "\n".join(task_ids)
+    if trailing_newline:
+        serialized += "\n"
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _find_resume_run(data_root: Path, scenario: str, task_ids: list[str]) -> str | None:
@@ -335,7 +345,8 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
     if len(set(task_ids)) != 24:
         raise ValueError("P3a task list 含重复 task_id")
     recorded_ids_hash = task_data.get("metadata", {}).get("task_ids_sha256")
-    if recorded_ids_hash and recorded_ids_hash != _task_ids_hash(task_ids):
+    valid_ids_hashes = {_task_ids_hash(task_ids), _task_ids_hash(task_ids, trailing_newline=True)}
+    if recorded_ids_hash and recorded_ids_hash not in valid_ids_hashes:
         raise ValueError("P3a task list hash 与 metadata.task_ids_sha256 不一致")
     logger = ProgressLogger()
     env = TeacherEnvClient(env_endpoint, timeout=60.0)

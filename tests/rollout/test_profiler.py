@@ -107,7 +107,7 @@ def test_profile_driver_runs_fixed_plan_with_fake_clients(tmp_path, monkeypatch)
     task_file = tmp_path / "tasks.json"
     task_ids = [f"t{i}" for i in range(24)]
     task_file.write_text(json.dumps({"metadata": {
-        "task_ids_sha256": __import__("hashlib").sha256("\n".join(task_ids).encode()).hexdigest(),
+        "task_ids_sha256": __import__("hashlib").sha256(("\n".join(task_ids) + "\n").encode()).hexdigest(),
         "source_manifest_sha256": "source", "seed": 1},
         "tasks": [{"task_id": task_id, "official_split": "train", "scenario": "single"}
                   for task_id in task_ids]}))

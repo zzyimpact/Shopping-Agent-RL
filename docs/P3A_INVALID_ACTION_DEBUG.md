@@ -171,7 +171,7 @@ Action: `search[黑色 高端 仿真秋海棠叶 单支 摄影道具 插花]`
 - 已修复：Single/Persona system prompt 来自 pinned `single_eval` YAML；Persona 使用 `instruction_simple` projection，且不泄漏 evaluator-only fields。
 - 已修复：action extraction/parser trace 复用 upstream 的精确 marker/regex，不修复 markdown、大小写或非法格式。
 - 已加入 regression：合法 product/option/Buy Now、非法 click、Single/Persona observation formatter、upstream extraction、旧 run invalidation/resume guard。
-- 本地非付费结果：targeted protocol/profiler/storage/prompt tests `37 passed, 6 skipped`；跳过项仅依赖本机未安装的 remote Flask runtime。
+- 本地非付费结果：targeted protocol/profiler/storage/prompt tests `46 passed`；remote service endpoint tests因本机未安装 Flask runtime 而跳过。
 - `py_compile`、shell syntax 和 `git diff --check` 均通过；由于当前网络无法解析 remote host，未声称 live remote replay 已通过。
 - 本机未执行 remote live replay：当前网络无法解析 `rtx-pro-6000-3`；remote replay 需由用户网络恢复后手动 smoke。
 

@@ -88,6 +88,19 @@ def test_profile_extra_immutable_fields_refuse_resume(tmp_path):
                       resume=True, extra_immutable_fields=("purpose", "selected_task_list_hash"))
 
 
+def test_invalidated_profile_run_cannot_resume(tmp_path):
+    values = manifest(purpose="p3a_profiling", profiler_protocol_version="old")
+    with TeacherLedger(tmp_path, values, profile=True,
+                       extra_immutable_fields=("purpose", "profiler_protocol_version")) as ledger:
+        ledger.set_state("status", "invalidated_by_implementation_bug")
+        payload = json.loads(ledger.paths.manifest.read_text(encoding="utf-8"))
+        payload["status"] = "invalidated_by_implementation_bug"
+        ledger.paths.manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ResumeConfigMismatch, match="invalidated"):
+        TeacherLedger(tmp_path, values, profile=True, resume=True,
+                      extra_immutable_fields=("purpose", "profiler_protocol_version"))
+
+
 def test_profile_unsolved_updates_artifact_and_ledger(tmp_path):
     with TeacherLedger(tmp_path, manifest(), profile=True) as ledger:
         attempt = ledger.start_attempt("task-unsolved")

@@ -17,9 +17,83 @@ import uuid
 
 from flask import Flask, jsonify, request
 
+# This file is copied to the remote CPU host by teacher_env_up.sh.  Importing
+# the small helper is safe there because it has no simulator dependencies;
+# keep the upstream parser itself as the execution source of truth below.
+try:
+    from rollout.protocol import (
+        POLICY_OBSERVATION_VERSION,
+        PROFILER_PROTOCOL_VERSION,
+        build_reset_policy_observation,
+        build_step_policy_observation,
+    )
+except ModuleNotFoundError:  # remote service launched outside project venv
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from rollout.protocol import (  # type: ignore[no-redef]
+        POLICY_OBSERVATION_VERSION,
+        PROFILER_PROTOCOL_VERSION,
+        build_reset_policy_observation,
+        build_step_policy_observation,
+    )
+
 app = Flask(__name__)
 active = {"env": None, "session_id": None, "task_id": None, "scenario": None}
 settings = {}
+
+
+def _extract_yaml_system_prompt(path: Path) -> str:
+    """Extract only a YAML ``system_prompt: |`` block.
+
+    The pinned standard config has legacy malformed scalar keys (for example
+    ``source:openai``), so parsing the whole file with PyYAML is deliberately
+    avoided.  This parser is limited to the known block-scalar shape and
+    rejects missing/ambiguous blocks instead of inventing a prompt.
+    """
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    candidates = [i for i, line in enumerate(lines)
+                  if line.strip().startswith("system_prompt:") and "|" in line]
+    if len(candidates) != 1:
+        raise RuntimeError(f"expected one system_prompt block in {path}")
+    start = candidates[0]
+    key_indent = len(lines[start]) - len(lines[start].lstrip())
+    body: list[str] = []
+    for line in lines[start + 1:]:
+        nonempty = bool(line.strip())
+        indent = len(line) - len(line.lstrip())
+        if nonempty and indent <= key_indent:
+            break
+        body.append(line)
+    nonempty_indents = [len(line) - len(line.lstrip()) for line in body if line.strip()]
+    if not nonempty_indents:
+        raise RuntimeError(f"empty system_prompt block in {path}")
+    strip_indent = min(nonempty_indents)
+    prompt = "\n".join(
+        line[strip_indent:] if line.strip() else "" for line in body
+    ).rstrip(" \t\n") + "\n"
+    if not prompt.strip():
+        raise RuntimeError(f"empty system_prompt block in {path}")
+    return prompt
+
+
+def _system_prompt_for(scenario: str) -> tuple[str, str]:
+    upstream_root = Path(os.environ.get("UPSTREAM_ROOT", "/root/ShopSimulator"))
+    config_name = "persona" if scenario == "single_persona" else "standard"
+    path = upstream_root / "single_eval/configs" / config_name / "qwen3_235b.yaml"
+    return _extract_yaml_system_prompt(path), str(path)
+
+
+def _safe_persona(value: Any) -> dict[str, Any]:
+    """Keep only policy-visible persona fields; never expose evaluator data."""
+
+    if not isinstance(value, dict):
+        return {}
+    forbidden = {
+        "__reasoning__", "asin", "target_asin", "attribute", "attributes",
+        "options", "instruction_options", "pricing", "price", "reward",
+        "goal", "target_product", "target_option", "query", "category",
+    }
+    return {str(key): item for key, item in value.items() if str(key) not in forbidden}
 
 
 def manifest_ids(path: Path) -> set[str]:
@@ -39,6 +113,9 @@ def health():
         "catalog": str(settings["catalog"]), "search_root": str(settings["search_root"]),
         "source_fingerprint": settings["source_fingerprint"],
         "runtime_loaded": settings.get("server") is not None,
+        "environment_version": "task-scoped-v2",
+        "policy_observation_version": POLICY_OBSERVATION_VERSION,
+        "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
     })
 
 
@@ -89,22 +166,47 @@ def reset():
         observation, _ = env.reset(idx=0)
         session_id = uuid.uuid4().hex
         active.update({"env": env, "session_id": session_id, "task_id": task_id, "scenario": scenario})
-        system_prompt = str(env.prompt_template)
+        # single_eval supplies the policy prompt from its scenario YAML.  Do
+        # not silently substitute the environment template: those are
+        # different contracts in the pinned upstream snapshot.
+        system_prompt, prompt_source = _system_prompt_for(scenario)
+        instruction_simple = str(getattr(env, "instruction_simple", ""))
+        policy_instruction = (
+            instruction_simple if scenario == "single_persona" and instruction_simple
+            else str(getattr(env, "instruction_text", ""))
+        )
+        available_actions = env.get_available_actions()
+        policy_observation = build_reset_policy_observation(
+            policy_instruction,
+            scenario=scenario,
+            instruction_simple=instruction_simple or None,
+        )
         policy_context = {
             "system_prompt": system_prompt,
-            "source": "shop_env/web_agent_site/envs/web_agent_text_env.py",
+            "source": prompt_source,
             "prompt_hash": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest(),
+            "policy_observation_version": POLICY_OBSERVATION_VERSION,
+            "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
         }
         if scenario == "single_persona":
             persona = getattr(env, "user_persona", None)
             if not isinstance(persona, dict):
                 persona = env.server.goals[0].get("user_persona")
-            policy_context["user_persona"] = dict(persona or {})
+            policy_context["user_persona"] = _safe_persona(persona)
         return jsonify({
             "session_id": session_id, "task_id": task_id, "scenario": scenario,
-            "observation": observation, "available_actions": env.get_available_actions(),
-            "instruction": env.instruction_text, "policy_context": policy_context,
-            "environment_version": "task-scoped-v1", "reward_deviation_version": "query-match-false-v1",
+            # ``observation`` remains raw diagnostic state for compatibility;
+            # only ``policy_observation`` is intended for the teacher.
+            "observation": observation, "raw_observation": observation,
+            "policy_observation": policy_observation,
+            "available_actions": available_actions,
+            "instruction": getattr(env, "instruction_text", ""),
+            "instruction_simple": instruction_simple,
+            "policy_context": policy_context,
+            "environment_version": "task-scoped-v2",
+            "policy_observation_version": POLICY_OBSERVATION_VERSION,
+            "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
+            "reward_deviation_version": "query-match-false-v1",
         })
     except Exception as exc:
         close_active()
@@ -125,15 +227,42 @@ def step():
         from web_agent_site.engine.engine import parse_action
         action = _extract_action_from_response(response.replace("\\n", "\n"))
         action_name, action_arg = parse_action(action)
-        normalized_name = str(action_name).strip().lower()
-        normalized_arg = str(action_arg or "").strip().lower()
-        if normalized_name not in {"search", "click"} or not normalized_arg:
+        # Snapshot the legal set before executing the mutating environment
+        # step.  ``WebAgentTextEnv.step`` itself performs the same pre-step
+        # refresh; reading ``text_to_clickable`` after it would turn a valid
+        # product click into a false invalid_action on the detail page.
+        available_before = active["env"].get_available_actions()
+        clickable_before = set(active["env"].text_to_clickable or {})
+        action_name = str(action_name)
+        action_arg_text = str(action_arg) if action_arg is not None else ""
+        normalized_arg = action_arg_text.lower()
+        if action_name not in {"search", "click"} or not normalized_arg:
             return jsonify({"error": "malformed_action"}), 422
+        action_valid = (
+            (action_name == "search" and action_arg is not None and action_arg != "")
+            or (
+                action_name == "click"
+                and normalized_arg != "search"
+                and normalized_arg in clickable_before
+            )
+        )
         observation, status, _ = active["env"].step(action)
+        available_after = active["env"].get_available_actions()
+        instruction_simple = str(getattr(active["env"], "instruction_simple", ""))
+        policy_observation = build_step_policy_observation(
+            str(observation), available_after, scenario=str(active["scenario"]),
+            instruction_simple=instruction_simple or None,
+        )
         result = {
             "session_id": active["session_id"], "action": action, "observation": observation,
-            "available_actions": active["env"].get_available_actions(),
-            "action_valid": normalized_name == "search" or (normalized_arg != "search" and normalized_arg in active["env"].text_to_clickable),
+            "raw_observation": observation,
+            "policy_observation": policy_observation,
+            "available_actions": available_after,
+            "pre_step_available_actions": available_before,
+            "post_step_available_actions": available_after,
+            "action_valid": bool(action_valid),
+            "policy_observation_version": POLICY_OBSERVATION_VERSION,
+            "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
             **status,
         }
         return jsonify(result)

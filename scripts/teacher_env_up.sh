@@ -45,6 +45,8 @@ tunnel_health() {
 # model, secret, or generated artifact is transferred.
 scp -q "${PROJECT_ROOT}/scripts/remote_teacher_env_service.py" \
   "${REMOTE_HOST}:${REMOTE_PROJECT}/scripts/remote_teacher_env_service.py"
+scp -q "${PROJECT_ROOT}/src/rollout/protocol.py" \
+  "${REMOTE_HOST}:${REMOTE_PROJECT}/src/rollout/protocol.py"
 
 cleanup_failed_start() {
   # Do not tear down a healthy tunnel that predated this invocation if a

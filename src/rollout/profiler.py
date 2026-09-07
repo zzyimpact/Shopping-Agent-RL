@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-import re
 import time
 from typing import Any, Mapping
 
@@ -20,6 +19,11 @@ from env.teacher_env_client import TeacherEnvClient, TeacherEnvError
 from rollout.diversity import behavior_fingerprint, exact_duplicate, similarity_features
 from rollout.prompt import (append_turn, assert_no_evaluator_leakage,
                             build_initial_messages, policy_context_from_reset)
+from rollout.protocol import (
+    POLICY_OBSERVATION_VERSION,
+    PROFILER_PROTOCOL_VERSION,
+    trace_visible_action,
+)
 from rollout.progress import ProgressLogger
 from rollout.runtime import CollectionInfrastructureInterrupted, generate_or_interrupt
 from rollout.storage import GracefulCollectionStop, TeacherLedger, canonical_hash
@@ -36,6 +40,7 @@ EXTRA_IMMUTABLE = (
     "purpose", "selected_task_list_hash", "source_sft_manifest_hash", "upstream_prompt_hash",
     "max_action_steps", "profiling_limits", "query_match_deviation", "persona_pool_deviation",
     "environment_fingerprint", "reward_compatibility_version",
+    "policy_observation_version", "profiler_protocol_version",
 )
 
 
@@ -101,7 +106,10 @@ def _find_resume_run(
             import sqlite3
             db = sqlite3.connect(state_path)
             state = db.execute("SELECT value FROM run_state WHERE key='status'").fetchone()
-            if manifest.get("purpose") != "p3a_profiling" or manifest.get("scenario") != scenario or (state and state[0] == "complete"):
+            if (manifest.get("purpose") != "p3a_profiling"
+                    or manifest.get("scenario") != scenario
+                    or manifest.get("status") == "invalidated_by_implementation_bug"
+                    or (state and state[0] in {"complete", "invalidated_by_implementation_bug"})):
                 db.close()
                 continue
             if list(manifest.get("selected_task_ids", task_ids)) != list(task_ids):
@@ -198,14 +206,22 @@ def _success_records(ledger: TeacherLedger, task_id: str) -> list[dict[str, Any]
 
 
 def _valid_visible_action(text: str) -> bool:
-    # The remote service remains the source of truth for parsing.  This check
-    # only identifies a malformed visible protocol before spending an env step.
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    action_pattern = re.compile(r"^(search|click)\s*\[.+\]$", re.IGNORECASE | re.DOTALL)
-    return any(
-        line.lower().startswith("action:")
-        and bool(action_pattern.fullmatch(line.split(":", 1)[1].strip()))
-        for line in lines
+    # The upstream extractor/parser is the source of truth.  This local gate
+    # only prevents an obviously malformed response from consuming an env
+    # step; it deliberately does not repair markdown, case, or whitespace.
+    return bool(trace_visible_action(text)["canonical"])
+
+
+def _policy_observation(payload: Mapping[str, Any]) -> str:
+    """Read the explicit model-visible observation contract from the service."""
+
+    for key in ("policy_observation", "user_message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise ValueError(
+        "remote response missing canonical policy observation "
+        "(expected policy_observation or user_message)"
     )
 
 
@@ -221,7 +237,9 @@ def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_
         "collection_config_hash": canonical_hash({"scenario": scenario, "seed": metadata.get("seed"), "limits": PROFILE_LIMITS}),
         "shopsim_source_fingerprint": env_health.get("source_fingerprint", "unknown"),
         "environment_fingerprint": env_health.get("source_fingerprint", "unknown"),
-        "environment_version": env_payload.get("environment_version", "task-scoped-v1"),
+        "environment_version": env_payload.get("environment_version", "task-scoped-v2"),
+        "policy_observation_version": env_payload.get("policy_observation_version", POLICY_OBSERVATION_VERSION),
+        "profiler_protocol_version": env_payload.get("profiler_protocol_version", PROFILER_PROTOCOL_VERSION),
         "reward_deviation_version": env_payload.get("reward_deviation_version", "query-match-false-v1"),
         "reward_compatibility_version": "query-match-false-v1",
         "query_match_deviation": "missing query -> query_match=False",
@@ -290,13 +308,15 @@ def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Te
         ledger.save_attempt(attempt_id, base, status="environment_failure")
         return "environment_failure"
     context = policy_context_from_reset(reset.payload, scenario)
-    messages = build_initial_messages(context, str(reset.payload.get("observation", "")))
+    initial_policy_observation = _policy_observation(reset.payload)
+    messages = build_initial_messages(context, initial_policy_observation)
     assert_no_evaluator_leakage(messages)
     record: dict[str, Any] = {
         "task_id": task_id, "scenario": scenario, "attempt_index": attempt_index,
         "attempt_phase": phase, "started_at": _now(), "termination_reason": None,
         "success": False, "messages": list(messages), "visible_responses": [],
-        "actions": [], "observations": [reset.payload.get("observation", "")],
+        "actions": [], "observations": [initial_policy_observation],
+        "raw_observations": [reset.payload.get("raw_observation", reset.payload.get("observation", ""))],
         "api_diagnostics": [], "environment_diagnostics": [], "infrastructure_retries": 0,
         "malformed_action_count": 0, "invalid_action_count": 0, "action_steps": 0,
         "total_input_tokens": 0, "total_output_tokens": 0, "api_latency_total_s": 0.0,
@@ -335,6 +355,7 @@ def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Te
                                     status="provider_model_mismatch")
                 raise TeacherModelMismatch(f"teacher returned model {response.model!r}, expected {expected_model!r}")
             record["visible_responses"].append(response.text)
+            record.setdefault("action_traces", []).append(trace_visible_action(response.text))
             record["api_diagnostics"].append({
                 "latency_s": response.latency_s, "retries": response.retries,
                 "input_tokens": response.input_tokens, "output_tokens": response.output_tokens,
@@ -371,9 +392,19 @@ def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Te
                 ledger.save_attempt(attempt_id, record, status="environment_failure")
                 return "environment_failure"
             record["actions"].append(result.payload.get("action", ""))
-            observation = str(result.payload.get("observation", ""))
+            observation = _policy_observation(result.payload)
             record["observations"].append(observation)
-            record["environment_diagnostics"].append({"latency_s": result.latency_s})
+            record.setdefault("raw_observations", []).append(
+                result.payload.get("raw_observation", result.payload.get("observation", ""))
+            )
+            record["environment_diagnostics"].append({
+                "latency_s": result.latency_s,
+                "action_valid": result.payload.get("action_valid", "N/A"),
+                "pre_step_available_actions": result.payload.get("pre_step_available_actions"),
+                "post_step_available_actions": result.payload.get(
+                    "post_step_available_actions", result.payload.get("available_actions")
+                ),
+            })
             record["environment_latency_total_s"] += result.latency_s
             record["action_steps"] = step + 1
             if result.payload.get("action_valid") is False:
@@ -450,6 +481,7 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
         raise RuntimeError("ShopSimulator health check failed")
     probe = env.reset(scenario, task_ids[0])
     context = policy_context_from_reset(probe.payload, scenario)
+    _policy_observation(probe.payload)
     env.release(probe.payload["session_id"])
     import uuid
     if resume and run_id is None:
@@ -458,6 +490,12 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
             "api_style": cfg["TEACHER_API_STYLE"],
             "reasoning_effort": cfg["TEACHER_REASONING_EFFORT"],
             "selected_task_list_hash": recorded_ids_hash,
+            "policy_observation_version": probe.payload.get(
+                "policy_observation_version", POLICY_OBSERVATION_VERSION
+            ),
+            "profiler_protocol_version": probe.payload.get(
+                "profiler_protocol_version", PROFILER_PROTOCOL_VERSION
+            ),
         })
         if selected is None:
             raise FileNotFoundError("没有找到该 scenario 的唯一未完成 profiling run；请去掉 --resume 新建 run")

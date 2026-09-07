@@ -20,7 +20,10 @@ class FakeEnv:
 
     def reset(self, scenario, task_id):
         self.resets += 1
-        return EnvResult({"session_id": f"s{self.resets}", "observation": "obs", "policy_context": {
+        return EnvResult({"session_id": f"s{self.resets}", "observation": "obs",
+                          "policy_observation": "obs\n\n搜索功能是否可用: True\n\n可点击的按钮: []",
+                          "policy_observation_version": "single-eval-policy-v1",
+                          "profiler_protocol_version": "p3a-visible-action-v2", "policy_context": {
             "system_prompt": "prompt", "source": "upstream.py",
             "prompt_hash": __import__("hashlib").sha256(b"prompt").hexdigest(),
         }, "instruction": "hidden"}, 0.01)
@@ -29,7 +32,9 @@ class FakeEnv:
         self.steps += 1
         if self.fail:
             raise TeacherEnvError("remote environment request failed")
-        return EnvResult({"action": "click[p1]", "observation": "done", "done": True,
+        return EnvResult({"action": "click[p1]", "observation": "done",
+                          "policy_observation": "done\n\n搜索功能是否可用: False\n\n可点击的按钮: []",
+                          "action_valid": True, "done": True,
                           "reward": 1.0, "reward_detail": {"r_type": 1, "r_att": 1, "r_option": 1, "r_price": 1,
                           "query_match": False}, "purchase": {"asin": "p1"}, "goal": {}}, 0.02)
 
@@ -48,7 +53,9 @@ class FakeClient:
 class NeverDoneEnv(FakeEnv):
     def step(self, session, response):
         self.steps += 1
-        return EnvResult({"action": "search[x]", "observation": f"obs-{self.steps}", "done": False,
+        return EnvResult({"action": "search[x]", "observation": f"obs-{self.steps}",
+                          "policy_observation": f"obs-{self.steps}\n\n搜索功能是否可用: True\n\n可点击的按钮: []",
+                          "done": False,
                           "action_valid": True}, 0.001)
 
 

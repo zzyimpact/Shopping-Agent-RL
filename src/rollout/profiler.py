@@ -214,7 +214,8 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 ledger.save_attempt(attempt_id, record, status="provider_config_error")
                 raise ProfileStop(f"teacher request/config failure ({exc.kind})") from exc
             if response.model and response.model != expected_model:
-                ledger.mark_infrastructure_interrupted(attempt_id, {**record, "termination_reason": "provider_model_mismatch"})
+                ledger.save_attempt(attempt_id, {**record, "termination_reason": "provider_model_mismatch"},
+                                    status="provider_model_mismatch")
                 raise TeacherModelMismatch(f"teacher returned model {response.model!r}, expected {expected_model!r}")
             record["visible_responses"].append(response.text)
             record["messages"].append({"role": "assistant", "content": response.text})

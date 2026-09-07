@@ -37,3 +37,13 @@ def test_remote_error_classification():
     raw = httpx.Client(transport=httpx.MockTransport(handler))
     with TeacherEnvClient(client=raw) as client, pytest.raises(TeacherEnvError, match="HTTP 409: expired"):
         client.step("bad", "Action: search[x]")
+
+
+def test_invalid_action_error_is_classified_without_provider_body():
+    def handler(request):
+        return httpx.Response(422, request=request, json={"error": "malformed_action"})
+    raw = httpx.Client(transport=httpx.MockTransport(handler))
+    with TeacherEnvClient(client=raw) as client, pytest.raises(TeacherEnvError) as caught:
+        client.step("s", "garbage")
+    assert caught.value.kind == "invalid_action"
+    assert caught.value.status_code == 422

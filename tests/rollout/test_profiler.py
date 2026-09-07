@@ -39,14 +39,34 @@ class FakeClient:
         return TeacherResponse(self.text, "model-a", 200, "req", 4, 2, 0.01, 0, "chat_completions")
 
 
+class NeverDoneEnv(FakeEnv):
+    def step(self, session, response):
+        self.steps += 1
+        return EnvResult({"action": "search[x]", "observation": f"obs-{self.steps}", "done": False,
+                          "action_valid": True}, 0.001)
+
+
 def test_successful_termination_and_fresh_reset(tmp_path):
+    env = FakeEnv()
     with TeacherLedger(tmp_path, manifest(), profile=True) as ledger:
         guard = GracefulCollectionStop(ledger, "resume")
-        result = _run_attempt(ledger=ledger, env=FakeEnv(), client=FakeClient(), task_id="task-1", scenario="single",
+        result = _run_attempt(ledger=ledger, env=env, client=FakeClient(), task_id="task-1", scenario="single",
                               phase="first_success", attempt_index=1, expected_model="model-a",
                               logger=ProgressLogger(), guard=guard)
         assert result == "success"
         assert len(list(ledger.paths.trajectories.glob("*.json"))) == 1
+    assert env.resets == 1
+
+
+def test_max_action_steps_is_30(tmp_path):
+    env = NeverDoneEnv()
+    with TeacherLedger(tmp_path, manifest(), profile=True) as ledger:
+        guard = GracefulCollectionStop(ledger, "resume")
+        result = _run_attempt(ledger=ledger, env=env, client=FakeClient(), task_id="task-steps", scenario="single",
+                              phase="first_success", attempt_index=1, expected_model="model-a",
+                              logger=ProgressLogger(), guard=guard)
+        assert result == "max_steps"
+        assert env.steps == 30
 
 
 def test_malformed_action_and_environment_failure_are_separate(tmp_path):

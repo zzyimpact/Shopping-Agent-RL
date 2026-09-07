@@ -107,7 +107,7 @@ def test_run_one_uses_one_explicit_task_and_debug_only_artifact(tmp_path, monkey
 
     class FakeClient:
         def __init__(self, **kwargs):
-            assert kwargs["api_key"] == "fixture-secret"
+            assert kwargs["api_key"] == "fixture-value"
 
         def generate(self, messages):
             client_calls["generate"] += 1
@@ -126,7 +126,7 @@ def test_run_one_uses_one_explicit_task_and_debug_only_artifact(tmp_path, monkey
     env_file.write_text(
         "\n".join([
             "TEACHER_API_URL=https://relay.invalid/v1/chat/completions",
-            "TEACHER_API_KEY=fixture-secret",
+            "TEACHER_API_KEY=fixture-value",
             "TEACHER_API_MODEL=fixture-model",
             "TEACHER_API_STYLE=chat_completions",
             "TEACHER_REASONING_EFFORT=high",
@@ -144,5 +144,5 @@ def test_run_one_uses_one_explicit_task_and_debug_only_artifact(tmp_path, monkey
     payload = json.loads(attempt_files[0].read_text(encoding="utf-8"))
     assert payload["status"] == "success"
     assert payload["task_id"] == "task-1"
-    assert "fixture-secret" not in attempt_files[0].read_text(encoding="utf-8")
+    assert "fixture-value" not in attempt_files[0].read_text(encoding="utf-8")
     assert "ABOUT TO MAKE REAL PAID TEACHER API CALLS" in capsys.readouterr().out

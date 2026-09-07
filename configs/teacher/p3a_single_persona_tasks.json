@@ -6,8 +6,10 @@
     "seed": 1,
     "source_manifest": "sft_task_manifest_single_persona.json",
     "source_manifest_sha256": "f51c33217061479f9c95a1068621fcd38e4883ae3d2f6a1627037bea934f2125",
+    "source_primary_manifest_sha256": "b9009c21b4e7a55a770bae7fe1199f6ef9d9bc61e5f31c98d423123e4581008e",
     "sampling": "same proportional largest-remainder allocation by (domain, category) as P2; deterministic Random(seed+stratum_offset)",
-    "task_ids_sha256": "7be46d1df477cec1222b19a75d20c66c1807dd2e28b0df047adbfacef79033ec"
+    "task_ids_sha256": "7be46d1df477cec1222b19a75d20c66c1807dd2e28b0df047adbfacef79033ec",
+    "source_primary_manifest_sha256": "b9009c21b4e7a55a770bae7fe1199f6ef9d9bc61e5f31c98d423123e4581008e"
   },
   "tasks": [
     {

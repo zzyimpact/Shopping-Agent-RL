@@ -11,6 +11,7 @@ from rollout.protocol import (
     build_step_policy_observation,
     format_available_actions,
     project_persona_instruction,
+    trace_visible_action,
 )
 
 
@@ -79,3 +80,15 @@ def test_persona_step_replaces_only_instruction_segment():
     assert projected == "old-prefix [SEP] simple instruction [SEP] page text"
     # Upstream leaves malformed/no-separator observations unchanged.
     assert project_persona_instruction("raw page", "simple instruction") == "raw page"
+
+
+def test_upstream_action_extraction_and_parser_are_not_repaired():
+    trace = trace_visible_action("Thought: x\nAction: click[ASIN-1]")
+    assert trace["extracted_action"] == "click[ASIN-1]"
+    assert trace["action_name"] == "click"
+    assert trace["action_argument"] == "ASIN-1"
+    assert trace["canonical"] is True
+    markdown = trace_visible_action("Thought: x\nAction: `click[ASIN-1]`")
+    assert markdown["canonical"] is False
+    escaped = trace_visible_action("Thought: x\\nAction: search[杯子]")
+    assert escaped["extracted_action"] == "search[杯子]"

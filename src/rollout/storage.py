@@ -93,6 +93,10 @@ class TeacherLedger:
             if not resume:
                 raise FileExistsError(f"run 已存在；请使用 --resume: {root}")
             existing = json.loads(self.paths.manifest.read_text(encoding="utf-8"))
+            if existing.get("status") == "invalidated_by_implementation_bug":
+                raise ResumeConfigMismatch(
+                    "拒绝 resume：该 run 已被标记 invalidated_by_implementation_bug；请创建新的 run_id"
+                )
             compared_fields = (*IMMUTABLE_FIELDS, *self.extra_immutable_fields)
             mismatched = [k for k in compared_fields if existing.get(k) != desired.get(k)]
             if mismatched:

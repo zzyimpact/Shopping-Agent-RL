@@ -15,7 +15,16 @@ execution remain the upstream environment's responsibility.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping, Sequence
+
+
+# Immutable protocol identifiers.  A profiling run records these values so a
+# paid run made with an older visible contract can never be resumed silently.
+POLICY_OBSERVATION_VERSION = "single-eval-policy-v1"
+PROFILER_PROTOCOL_VERSION = "p3a-visible-action-v2"
+
+_ACTION_PATTERN = re.compile(r"(.+)\[(.+)\]")
 
 
 def format_available_actions(available_actions: Mapping[str, Any]) -> str:
@@ -38,6 +47,44 @@ def format_available_actions(available_actions: Mapping[str, Any]) -> str:
         f"\n\n搜索功能是否可用: {has_search_bar}"
         f"\n\n可点击的按钮: {json.dumps(clickables, ensure_ascii=False)}"
     )
+
+
+def extract_action_from_response(response: str) -> str:
+    """Mirror upstream ``shop_agent._extract_action_from_response`` exactly."""
+
+    normalized = str(response).replace("\\n", "\n")
+    marker = "\nAction: "
+    if marker in normalized:
+        return normalized.split(marker, 1)[1]
+    return normalized
+
+
+def parse_action(action: str) -> tuple[str, str | None]:
+    """Mirror upstream ``engine.parse_action`` for offline diagnostics."""
+
+    match = _ACTION_PATTERN.match(str(action))
+    if match is None:
+        return str(action), None
+    return match.groups()[0], match.groups()[1]
+
+
+def trace_visible_action(response: str) -> dict[str, Any]:
+    """Return extraction/parse details without repairing teacher output."""
+
+    normalized = str(response).replace("\\n", "\n")
+    extracted = extract_action_from_response(response)
+    name, argument = parse_action(extracted)
+    return {
+        "normalized_response": normalized,
+        "extracted_action": extracted,
+        "action_name": name,
+        "action_argument": argument,
+        "canonical": (
+            name in {"search", "click"}
+            and isinstance(argument, str)
+            and bool(argument.strip())
+        ),
+    }
 
 
 def _persona_instruction(observation: str, instruction_simple: str | None) -> str:
@@ -107,4 +154,3 @@ def project_persona_instruction(observation: str, instruction_simple: str) -> st
     """Public testable wrapper for the upstream Persona projection."""
 
     return _persona_instruction(observation, instruction_simple)
-

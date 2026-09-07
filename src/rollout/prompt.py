@@ -112,7 +112,10 @@ def _persona_text(persona: Mapping[str, Any]) -> str:
                  "target_product", "target_option"}
     if forbidden.intersection(clean):
         raise ValueError("persona contains evaluator-only goal fields")
-    return "\n用户个人文档：" + json.dumps(clean, ensure_ascii=False, sort_keys=True)
+    # Match ``single_eval/agent.py`` exactly.  Preserve mapping insertion order
+    # rather than sorting keys because the serialized visible conversation is
+    # part of the policy contract.
+    return "\n用户的个人文档是：" + json.dumps(clean, ensure_ascii=False)
 
 
 def build_initial_messages(context: PolicyContext, observation: str) -> list[dict[str, str]]:

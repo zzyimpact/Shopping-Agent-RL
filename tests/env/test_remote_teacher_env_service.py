@@ -95,3 +95,16 @@ def test_search_is_valid_when_search_bar_is_available(service_module, monkeypatc
         })
     assert response.status_code == 200
     assert response.get_json()["action_valid"] is True
+
+
+@pytest.mark.parametrize("clickable", ["asin-1", "red", "Buy Now"])
+def test_valid_product_option_and_buy_now_are_pre_step_valid(service_module, monkeypatch, clickable):
+    _install_parser_modules(monkeypatch)
+    env = _MutatingEnv(initial_clickables=[clickable])
+    service_module.active.update({"env": env, "session_id": "s1", "scenario": "single", "task_id": "t"})
+    with service_module.app.test_client() as client:
+        response = client.post("/step", json={
+            "session_id": "s1", "response": f"Thought: click\nAction: click[{clickable}]",
+        })
+    assert response.status_code == 200
+    assert response.get_json()["action_valid"] is True

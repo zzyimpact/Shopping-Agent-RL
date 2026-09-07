@@ -85,10 +85,12 @@ P3c formal collection caps；P3b 才根据结果冻结 attempt cap、reserve 与
 P3a 使用 `data/teacher_profile/<scenario>/<run_id>/` 的 `trajectories/`，与正式的
 `data/teacher_raw/` 物理隔离；profiling artifacts 永远不会直接进入 SFT。
 
-Prompt/rollout 使用 remote `web_agent_text_env.py` 返回的 exact upstream prompt/source/hash、
-当前 persona 和 observation；每次 API 请求发送完整 visible history，teacher 只返回可见
-`Thought:`/`Action:` protocol。第二次 rollout fresh reset 且不提供第一条 trajectory，不做
-diversity-conditioned prompting，不保存 hidden chain-of-thought。
+Prompt/rollout 使用 pinned `single_eval/configs/{standard,persona}/qwen3_235b.yaml` 的
+scenario system prompt/source/hash、当前 persona 和 canonical `policy_observation`；每次 API
+请求发送完整 visible history，teacher 只返回可见 `Thought:`/`Action:` protocol。remote
+service 同时返回 raw observation 与 pre/post action diagnostics，但 collector 不把它们直接喂给
+teacher。第二次 rollout fresh reset 且不提供第一条 trajectory，不做 diversity-conditioned
+prompting，不保存 hidden chain-of-thought。
 
 本轮明确不执行真实 teacher request、批量 trajectory、SFT formatter/training、GRPO、GPU 或模型 inference；
 用户完成两个 scenario 后，再用 `scripts/summarize_teacher_profile.py` 生成真实报告供 P3b 分析。
@@ -113,6 +115,8 @@ bash scripts/teacher_env_down.sh
 对相应 scenario 使用 `--resume`。命令会按当前 API model/style/reasoning 与冻结 task
 列表筛选兼容 run，并自动选择 `created_at` 最新的未完成 run；终端会打印所选 run 的
 状态、已触及 task 数、terminal task 数、attempt 数和成功数。已完成 run 不参与选择。
+被标记为 `invalidated_by_implementation_bug` 的旧 run 永远不会被 resume；修复协议后必须
+创建新的 run_id。
 如需恢复更早的兼容 run，可用 `--run-id` 显式覆盖自动选择。例如：
 
 ```bash

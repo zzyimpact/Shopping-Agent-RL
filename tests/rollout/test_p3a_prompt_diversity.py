@@ -14,7 +14,7 @@ def test_persona_injection_and_no_evaluator_leakage():
                             prompt_hash(UPSTREAM_PERSONA_PROMPT), {"预算": "100", "偏好": "蓝色"})
     messages = build_initial_messages(context, "页面观察")
     assert messages[0]["role"] == "system"
-    assert "用户个人文档" in messages[0]["content"]
+    assert "用户的个人文档是：" in messages[0]["content"]
     assert_no_evaluator_leakage(messages)
 
 

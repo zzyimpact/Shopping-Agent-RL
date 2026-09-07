@@ -44,9 +44,32 @@ from rollout.teacher_client import (  # noqa: E402
 
 MAX_ACTION_STEPS = 30
 
+_SAFE_LOCAL_ERROR_PREFIXES = (
+    "remote response missing canonical policy observation",
+    "remote reset missing policy_context",
+    "remote policy_context has incomplete prompt provenance",
+    "remote policy_context prompt hash mismatch",
+    "persona reset missing user_persona",
+    "single reset unexpectedly exposed persona",
+    "persona contains evaluator-only goal fields",
+    "instruction must be text",
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_local_error(exc: Exception) -> dict[str, str]:
+    """Expose only known local validation messages in debug artifacts."""
+
+    error = {"kind": type(exc).__name__}
+    message = str(exc)
+    if isinstance(exc, ValueError) and any(
+        message.startswith(prefix) for prefix in _SAFE_LOCAL_ERROR_PREFIXES
+    ):
+        error["message"] = message
+    return error
 
 
 def _safe_component(value: str) -> str:
@@ -376,10 +399,12 @@ def run_one(*, scenario: str, task_id: str, endpoint: str, env_file: Path,
     except Exception as exc:  # noqa: BLE001 - redact provider/environment details
         outcome = "local_error"
         record["status"] = outcome
-        record["error"] = {"kind": type(exc).__name__}
+        record["error"] = _safe_local_error(exc)
         record["finished_at"] = _utc_now()
         _write_record(record_path, record)
-        print(f"One-task smoke failed locally: {type(exc).__name__}", file=sys.stderr)
+        detail = record["error"].get("message")
+        suffix = f": {detail}" if detail else ""
+        print(f"One-task smoke failed locally: {type(exc).__name__}{suffix}", file=sys.stderr)
     finally:
         if session_id and env is not None:
             try:

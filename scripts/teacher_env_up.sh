@@ -7,6 +7,9 @@ REMOTE_HOST="${TEACHER_ENV_REMOTE_HOST:-rtx-pro-6000-3}"
 REMOTE_PROJECT="${TEACHER_ENV_REMOTE_PROJECT:-/root/shopping-agent-rl}"
 REMOTE_PORT="${TEACHER_ENV_REMOTE_PORT:-5100}"
 LOCAL_PORT="${TEACHER_ENV_LOCAL_PORT:-5500}"
+EXPECTED_ENVIRONMENT_VERSION="task-scoped-v2"
+EXPECTED_POLICY_OBSERVATION_VERSION="single-eval-policy-v1"
+EXPECTED_PROFILER_PROTOCOL_VERSION="p3a-visible-action-v2"
 STATE_DIR="${PROJECT_ROOT}/.cache/teacher_env"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 TUNNEL_LOG="${STATE_DIR}/tunnel.log"
@@ -59,10 +62,15 @@ cleanup_failed_start() {
 }
 trap cleanup_failed_start ERR
 
-remote_result="$(ssh "${REMOTE_HOST}" bash -s -- "${REMOTE_PROJECT}" "${REMOTE_PORT}" <<'REMOTE'
+remote_result="$(ssh "${REMOTE_HOST}" bash -s -- "${REMOTE_PROJECT}" "${REMOTE_PORT}" \
+  "${EXPECTED_ENVIRONMENT_VERSION}" "${EXPECTED_POLICY_OBSERVATION_VERSION}" \
+  "${EXPECTED_PROFILER_PROTOCOL_VERSION}" <<'REMOTE'
 set -euo pipefail
 project=$1
 port=$2
+expected_environment_version=$3
+expected_policy_observation_version=$4
+expected_profiler_protocol_version=$5
 state=/root/data/shopsim/teacher_env
 pid_file="${state}/service.pid"
 mkdir -p "${state}"
@@ -83,14 +91,20 @@ stop_service() {
     kill -9 "${pid}" 2>/dev/null || true
   fi
 }
+health_matches() {
+  curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/health" \
+    | /root/miniconda3/bin/python -c 'import json, sys; payload=json.load(sys.stdin); expected={"environment_version": sys.argv[1], "policy_observation_version": sys.argv[2], "profiler_protocol_version": sys.argv[3]}; sys.exit(0 if all(payload.get(k) == v for k, v in expected.items()) else 1)' \
+      "${expected_environment_version}" "${expected_policy_observation_version}" \
+      "${expected_profiler_protocol_version}"
+}
 if [[ -f "${pid_file}" ]]; then
   pid="$(cat "${pid_file}")"
   if service_matches "${pid}"; then
-    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+    if health_matches >/dev/null 2>&1; then
       echo "EXISTING ${pid}"
       exit 0
     fi
-    echo "UNHEALTHY ${pid}; restarting"
+    echo "STALE_OR_UNHEALTHY ${pid}; restarting"
     stop_service "${pid}"
   fi
   rm -f "${pid_file}"

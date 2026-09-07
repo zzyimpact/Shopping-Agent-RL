@@ -315,6 +315,14 @@ def run_one(*, scenario: str, task_id: str, endpoint: str, env_file: Path,
                 f"available_clickables={step_record['available_actions']['clickable_count']} "
                 f"env latency={result.latency_s:.2f}s"
             )
+            if "action_valid" not in payload:
+                outcome = "protocol_error"
+                record["status"] = outcome
+                record["finished_at"] = _utc_now()
+                record["error"] = {"kind": "missing_action_valid"}
+                _write_record(record_path, record)
+                print(f"[step {step_number}] missing action_valid; stopping", file=sys.stderr)
+                break
             if step_record["action_valid"] is False:
                 outcome = "invalid_action"
                 record["status"] = outcome
@@ -323,7 +331,11 @@ def run_one(*, scenario: str, task_id: str, endpoint: str, env_file: Path,
                 print(f"[step {step_number}] invalid_action; stopping one-task smoke")
                 break
             if step_record["done"]:
-                outcome = "success" if payload.get("reward_detail", {}).get("r_succ", payload.get("reward", 0)) == 1 else "terminal_unsuccessful"
+                detail = payload.get("reward_detail")
+                success_value = detail.get("r_succ") if isinstance(detail, Mapping) else None
+                if success_value is None:
+                    success_value = payload.get("reward", 0)
+                outcome = "success" if success_value == 1 else "terminal_unsuccessful"
                 record["status"] = outcome
                 record["finished_at"] = _utc_now()
                 _write_record(record_path, record)

@@ -133,7 +133,11 @@ num_workers
 P0  Upstream audit + project skeleton
 P1  Remote CPU bootstrap
 P2  Data + environment + reward + profiling
-P3  Teacher rollout + SFT dataset
+P3-0 API & collection infrastructure smoke
+P3a Teacher profiling
+P3b Collection policy freeze
+P3c Formal collection
+P3d Dataset freeze
 P4  Model / large artifact staging
 G0  GPU_READY Gate
 P5  GPU preflight

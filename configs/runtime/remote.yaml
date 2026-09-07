@@ -19,6 +19,11 @@ remote:
   runs_root: /root/runs/shopsim-rl
   cache_root: /root/.cache/shopsim-rl
   compatibility_script: /root/shopping-agent-rl/scripts/apply_shopsim_catalog_compat.py
+  teacher_service_bind: 127.0.0.1
+  teacher_service_port: 5100
+  teacher_tunnel_local_bind: 127.0.0.1
+  teacher_tunnel_local_port: 5500
+  teacher_data_root: /root/data/shopsim/teacher_raw
   python: /root/miniconda3/bin/python
   pip: /root/miniconda3/bin/pip
 

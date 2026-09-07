@@ -12,6 +12,7 @@ venv/
 .env
 .env.*
 !.env.example
+!.env.teacher.example
 
 # Large artifacts
 /data/
@@ -31,6 +32,8 @@ outputs/
 experiments/*/
 !experiments/.gitkeep
 *.log
+*.sqlite
+*.sqlite-*
 
 # Caches and temporary files
 .cache/

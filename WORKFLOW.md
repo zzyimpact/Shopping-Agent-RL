@@ -133,7 +133,11 @@ num_workers
 P0  Upstream audit + project skeleton
 P1  Remote CPU bootstrap
 P2  Data + environment + reward + profiling
-P3  Teacher rollout + SFT dataset
+P3-0 API & collection infrastructure smoke
+P3a Teacher profiling
+P3b Collection policy freeze
+P3c Formal collection
+P3d Dataset freeze
 P4  Model / large artifact staging
 G0  GPU_READY Gate
 P5  GPU preflight
@@ -257,75 +261,51 @@ GPU 阶段不应该再发现 reward 基础实现错误。
 
 # 9. P3 — Teacher Rollout + SFT Dataset
 
-**Remote CPU + Teacher API；不租 GPU**
+**Remote CPU + Teacher API；不租 GPU。** Teacher controller 在本地运行，ShopSimulator
+留在 remote CPU，通过 SSH tunnel + HTTP 访问；不要在本地复制 ShopSimulator、Lucene、
+Pyserini、Java 或 spaCy。
 
-远程 CPU 负责：
-
-```text
-API request
-→ action parse
-→ ShopEnv.step
-→ next observation
-→ API request
-...
-→ reward
-```
-
-## 9.1 Teacher profiling
-
-先测：
-- teacher success rate；
-- actions/trajectory；
-- API token usage/cost；
-- environment latency；
-- attempts/success。
-
-这是成本 profiling，不是缩小版正式实验。
-
-## 9.2 正式 collection
-
-必须支持：
-- resume；
-- skip completed；
-- sharded output；
-- retry；
-- per-task attempt cap；
-- coverage-first；
-- near-duplicate detection；
-- replacement task；
-- collection statistics。
-
-目标保持 DESIGN.md：
+远程 CPU 的正式 rollout 链为：
 
 ```text
-Single:
-  ~3000 unique tasks
-  6000 successful trajectories
-
-Single & Pers:
-  ~3000 unique tasks
-  6000 successful trajectories
+local controller → teacher API
+local controller → SSH tunnel → ShopSimulator.reset/step
+→ textual action parse → ShopEnv.step → observation → … → reward
 ```
 
-共 12K success。
+## 9.1 P3-0 API & collection infrastructure smoke
 
-## 9.3 SFT dataset freeze
+先建立并验证薄 `TeacherClient`（chat-completions/responses adapter、15s connect /
+300s read timeout、最多 3 次 transient retry、Retry-After、诊断与 failure 分类）、
+SQLite + atomic JSON durable storage、immutable run manifest/resume、graceful Ctrl+C、
+remote task-scoped environment adapter、SSH up/down 脚本和 local/remote 分离 smoke。
+P3-0 不调用真实 teacher API、不批量采集 trajectory、不生成 SFT 数据。
 
-生成：
+## 9.2 P3a Teacher profiling
 
-```text
-sft_single.jsonl
-sft_single_persona.jsonl
-```
+P3-0 通过后再用单 worker 做小规模 profiling，测 teacher success rate、actions/trajectory、
+API token/cost、environment latency 和 attempts/success。此阶段才冻结 exact relay
+model identifier、generation 参数、attempt cap 与 diversity threshold。
 
-并保存：
-- dataset manifest/hash；
-- teacher model/version；
-- teacher generation config；
-- source task manifest；
-- collection stats。
+## 9.3 P3b Collection policy freeze
 
-正式数据生成后冻结；重做必须作为新 data version。
+依据 P3a 结果冻结 collection policy 的运行参数。原则已批准但本轮只记录：每 scenario
+目标 6,000 successful trajectories、约 3,000 unique tasks、每 task 接受 1–3 条（2 条是
+default target）；coverage-first Pass A/B/C、bounded retry、same-stratum reserve replacement、
+以及 post-hoc 行为多样性过滤。
+
+## 9.4 P3c Formal collection
+
+冻结后正式 collection 必须支持 resume、skip completed、sharded output、retry、per-task
+attempt cap、near-duplicate detection、replacement task 和 collection statistics。所有
+attempt（包括失败/partial/infrastructure interruption）保留审计 artifact，只有 accepted
+successful trajectories 可进入后续 SFT。
+
+## 9.5 P3d Dataset freeze
+
+生成 `sft_single.jsonl` 与 `sft_single_persona.jsonl`，并保存 dataset manifest/hash、teacher
+model/version/generation config、source task manifest 与 collection stats；正式数据生成后
+冻结，重做必须作为新的 data version。
 
 ---
 
@@ -688,7 +668,11 @@ TEACHER_API_KEY
 | P0 | Upstream audit + skeleton | 否 | 是 | review |
 | P1 | Remote bootstrap | 否 | 是 | 执行/验收 |
 | P2 | Data + reward + profiling | 否 | 是 | review |
-| P3 | Teacher + SFT data | 否 | profiling可；正式collection需批准 | 配key/批准 |
+| P3-0 | API & collection infrastructure smoke | 否 | 是；不调用真实 teacher API | 本地配置后 smoke |
+| P3a | Teacher profiling | 否 | 小规模 profiling | 触发/验收 |
+| P3b | Collection policy freeze | 否 | 根据 profiling 固定参数 | review |
+| P3c | Formal collection | 否 | 需批准后执行 | 配 key/批准 |
+| P3d | Dataset freeze | 否 | formatter/hash/freeze | review |
 | P4 | 大文件 staging | 否 | 辅助 | 本地下载/传输 |
 | G0 | GPU_READY | 否 | 是 | 决定开卡 |
 | P5 | GPU preflight | 是 | 准备脚本 | 触发 |

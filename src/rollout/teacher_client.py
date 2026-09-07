@@ -95,10 +95,18 @@ def _content_from_response(data: Mapping[str, Any], style: str) -> str:
     output = data.get("output")
     if isinstance(output, list):
         chunks: list[str] = []
+        saw_text_field = False
         for item in output:
             for content in item.get("content", []) if isinstance(item, Mapping) else []:
-                if isinstance(content, Mapping) and isinstance(content.get("text"), str):
+                if isinstance(content, Mapping) and "text" in content:
+                    if not isinstance(content.get("text"), str):
+                        raise TeacherClientError(
+                            "teacher provider protocol error", kind="provider_protocol_error", retryable=True
+                        )
+                    saw_text_field = True
                     chunks.append(content["text"])
+        if saw_text_field:
+            return "".join(chunks)
         if chunks:
             return "".join(chunks)
     raise TeacherClientError(

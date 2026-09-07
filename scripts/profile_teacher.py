@@ -20,8 +20,8 @@ from rollout.profiler import run_profile
 def main() -> int:
     parser = argparse.ArgumentParser(description="P3a single-worker teacher rollout profiling")
     parser.add_argument("--scenario", choices=("single", "single_persona"), required=True)
-    parser.add_argument("--resume", action="store_true", help="resume the unambiguous incomplete run")
-    parser.add_argument("--run-id", help="explicit profiling run id (normally unnecessary)")
+    parser.add_argument("--resume", action="store_true", help="resume an incomplete run; use --run-id when multiple exist")
+    parser.add_argument("--run-id", help="explicit profiling run id (required when --resume finds multiple runs)")
     parser.add_argument("--endpoint", default="http://127.0.0.1:5500")
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.teacher")

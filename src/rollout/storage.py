@@ -320,6 +320,7 @@ class GracefulCollectionStop:
                 {**self.current_record, "interruption": "SIGINT"},
             )
             self.current_attempt_id = None
+        self.ledger.set_state("status", "infrastructure_interrupted")
         self.ledger.close()
         self.logger.line("[STOP] Ctrl+C received. Current state preserved.")
         self.logger.line(f"Resume with: {self.resume_command}")

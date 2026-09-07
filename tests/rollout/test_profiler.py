@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from env.teacher_env_client import EnvResult, TeacherEnvError
-from rollout.profiler import _run_attempt
+from rollout.profiler import _find_resume_run, _run_attempt
 from rollout.progress import ProgressLogger
 from rollout.storage import GracefulCollectionStop, TeacherLedger
 from rollout.teacher_client import TeacherResponse
@@ -139,3 +139,28 @@ def test_profile_driver_runs_fixed_plan_with_fake_clients(tmp_path, monkeypatch)
     runs = list((tmp_path / "data" / "single").glob("*/"))
     assert len(runs) == 1
     assert len(list((runs[0] / "trajectories").glob("*.json"))) == 72
+
+
+def test_resume_requires_explicit_run_id_when_multiple_runs_exist(tmp_path):
+    import json
+    import sqlite3
+
+    scenario_root = tmp_path / "single"
+    for run_id, status in (("run-old", "infrastructure_interrupted"), ("run-new", "stopped")):
+        run_root = scenario_root / run_id
+        run_root.mkdir(parents=True)
+        (run_root / "run_manifest.json").write_text(json.dumps({
+            "purpose": "p3a_profiling", "scenario": "single",
+        }))
+        db = sqlite3.connect(run_root / "state.sqlite")
+        db.execute("CREATE TABLE run_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        db.execute("INSERT INTO run_state VALUES ('status', ?)", (status,))
+        db.commit()
+        db.close()
+
+    with pytest.raises(ValueError) as caught:
+        _find_resume_run(tmp_path, "single", [])
+    message = str(caught.value)
+    assert "--run-id" in message
+    assert "run-old (status=infrastructure_interrupted)" in message
+    assert "run-new (status=stopped)" in message

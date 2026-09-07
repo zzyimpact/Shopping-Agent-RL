@@ -33,6 +33,7 @@ def generate_or_interrupt(
             attempt_id,
             {**partial_record, "failure_class": exc.kind, "retries": exc.retries},
         )
+        ledger.set_state("status", "infrastructure_interrupted")
         ledger.close()
         (logger or ProgressLogger()).infrastructure_stop(resume_command)
         raise CollectionInfrastructureInterrupted(str(exc)) from exc

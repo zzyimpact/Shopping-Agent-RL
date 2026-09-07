@@ -50,7 +50,15 @@ python scripts/test_teacher_env.py
 bash scripts/teacher_env_down.sh
 ```
 
-脚本只管理自己记录的 tunnel/service PID，不使用 broad `pgrep`/kill。`test_teacher_env.py` 不调用 teacher API，而是对 Single 与 Single&Pers 的固定 TRAIN task 走真实 `reset → Thought/Action search → Lucene observation → click product → click option/SKU → Buy Now`，并检查 terminal reward 与 `query_match=False`。这只是 infrastructure smoke，不产生 teacher trajectory 或评测结果。
+脚本只管理自己记录的 tunnel/service PID，不使用 broad `pgrep`/kill。每次 `teacher_env_up.sh`
+都会同时检查远程 `/health` 与本地 tunnel；PID 尚存但 forwarding channel stale，或远程
+service PID 尚存但 `/health` 不通时，只回收匹配本项目命令行的 PID 并重建。运行中若网络
+瞬断，profiler 仍按 infrastructure-interruption 规则停止并保存状态；恢复前重新执行
+`teacher_env_up.sh`，然后用明确的 `--run-id ... --resume` 继续。`test_teacher_env.py`
+不调用 teacher API，而是对 Single 与 Single&Pers 的固定 TRAIN task 走真实 `reset →
+Thought/Action search → Lucene observation → click product → click option/SKU → Buy Now`，并
+检查 terminal reward 与 `query_match=False`。这只是 infrastructure smoke，不产生 teacher
+trajectory 或评测结果。
 
 Remote provenance：ShopSimulator public snapshot 不包含 `shop_env/search_engine`；index 使用 pinned Princeton WebShop commit `64fa2a5c15c7daa698b9ac93f5bb5437b634c9bd` 的兼容 converter/indexing source。Catalog-Fine index build 命令和 source fingerprint 见 [P2_ENVIRONMENT_SETUP.md](P2_ENVIRONMENT_SETUP.md)。当前 remote spaCy 模型为 `core_web_sm 3.8.0`。
 
@@ -102,5 +110,15 @@ bash scripts/teacher_env_down.sh
 ```
 
 如果 infrastructure interruption，已完成的 profiling artifact 会保留；检查 API 后仅
-对相应 scenario 使用 `python3 scripts/profile_teacher.py --scenario <scenario> --resume`。
-P3a 不自动调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。
+对相应 scenario 使用 `--resume`。为避免在多个历史 run 之间静默选错，若该 scenario
+存在多个未完成 run，命令会列出 run ID/status 并要求显式选择。例如：
+
+```bash
+python3 scripts/profile_teacher.py \
+  --scenario single \
+  --run-id p3a-20260907T124356Z-920dc25e \
+  --resume
+```
+
+`--run-id` 必须来自命令报出的未完成 run；不会删除、覆盖或合并其他 run。若只有一个
+未完成 run，才可省略 `--run-id`。P3a 不自动调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。

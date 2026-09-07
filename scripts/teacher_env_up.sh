@@ -11,7 +11,33 @@ STATE_DIR="${PROJECT_ROOT}/.cache/teacher_env"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 TUNNEL_LOG="${STATE_DIR}/tunnel.log"
 REMOTE_OWNED_FILE="${STATE_DIR}/remote_service_owned"
+TUNNEL_CREATED=0
 mkdir -p "${STATE_DIR}"
+
+tunnel_matches() {
+  local pid="$1"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && \
+    ps -p "${pid}" -o command= 2>/dev/null | grep -Fq -- \
+      "-L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}"
+}
+
+stop_owned_tunnel() {
+  local pid="${1:-}"
+  if tunnel_matches "${pid}"; then
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -9 "${pid}" 2>/dev/null || true
+  fi
+  rm -f "${TUNNEL_PID_FILE}"
+}
+
+tunnel_health() {
+  curl -fsS --connect-timeout 2 --max-time 5 \
+    "http://127.0.0.1:${LOCAL_PORT}/health" >/dev/null 2>&1
+}
 
 # The service is project-owned (not ShopSimulator upstream).  Sync this one
 # tracked file so a remote checkout that predates the current branch still
@@ -21,15 +47,12 @@ scp -q "${PROJECT_ROOT}/scripts/remote_teacher_env_service.py" \
   "${REMOTE_HOST}:${REMOTE_PROJECT}/scripts/remote_teacher_env_service.py"
 
 cleanup_failed_start() {
-  if [[ -f "${TUNNEL_PID_FILE}" ]]; then
+  # Do not tear down a healthy tunnel that predated this invocation if a
+  # remote scp/ssh step fails before we create a replacement.
+  if [[ "${TUNNEL_CREATED}" == "1" && -f "${TUNNEL_PID_FILE}" ]]; then
     local pid
     pid="$(cat "${TUNNEL_PID_FILE}" 2>/dev/null || true)"
-    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && \
-       ps -p "${pid}" -o command= | grep -Fq "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}"; then
-      kill "${pid}" 2>/dev/null || true
-      wait "${pid}" 2>/dev/null || true
-    fi
-    rm -f "${TUNNEL_PID_FILE}"
+    stop_owned_tunnel "${pid}"
   fi
 }
 trap cleanup_failed_start ERR
@@ -41,11 +64,32 @@ port=$2
 state=/root/data/shopsim/teacher_env
 pid_file="${state}/service.pid"
 mkdir -p "${state}"
+service_matches() {
+  local pid="$1"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && \
+    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -Fq \
+      "${project}/scripts/remote_teacher_env_service.py"
+}
+stop_service() {
+  local pid="$1"
+  if service_matches "${pid}"; then
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -9 "${pid}" 2>/dev/null || true
+  fi
+}
 if [[ -f "${pid_file}" ]]; then
   pid="$(cat "${pid_file}")"
-  if kill -0 "${pid}" 2>/dev/null && tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq "remote_teacher_env_service.py"; then
-    echo "EXISTING ${pid}"
-    exit 0
+  if service_matches "${pid}"; then
+    if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+      echo "EXISTING ${pid}"
+      exit 0
+    fi
+    echo "UNHEALTHY ${pid}; restarting"
+    stop_service "${pid}"
   fi
   rm -f "${pid_file}"
 fi
@@ -75,22 +119,32 @@ fi
 
 if [[ -f "${TUNNEL_PID_FILE}" ]]; then
   tunnel_pid="$(cat "${TUNNEL_PID_FILE}")"
-  if kill -0 "${tunnel_pid}" 2>/dev/null && ps -p "${tunnel_pid}" -o command= | grep -Fq "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}"; then
-    echo "Tunnel already active: PID ${tunnel_pid}"
+  if tunnel_matches "${tunnel_pid}"; then
+    if tunnel_health; then
+      echo "Tunnel already active: PID ${tunnel_pid}"
+    else
+      # The SSH process can survive while its forwarding channel is stale
+      # after a laptop/network transition.  Recycle only this exact tunnel.
+      echo "Existing tunnel PID ${tunnel_pid} is unhealthy; restarting it."
+      stop_owned_tunnel "${tunnel_pid}"
+      TUNNEL_CREATED=1
+    fi
   else
     rm -f "${TUNNEL_PID_FILE}"
   fi
 fi
 if [[ ! -f "${TUNNEL_PID_FILE}" ]]; then
   # nohup 使 tunnel 脱离本次 shell；PID 只记录本脚本启动的 ssh，不使用 broad kill。
-  nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+  nohup ssh -N -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes \
     -L "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}" "${REMOTE_HOST}" \
     >"${TUNNEL_LOG}" 2>&1 </dev/null &
   tunnel_pid=$!
   echo "${tunnel_pid}" > "${TUNNEL_PID_FILE}"
+  TUNNEL_CREATED=1
 fi
 for _ in $(seq 1 20); do
-  if curl -fsS "http://127.0.0.1:${LOCAL_PORT}/health" >/dev/null; then
+  if tunnel_matches "$(cat "${TUNNEL_PID_FILE}" 2>/dev/null || true)" && tunnel_health; then
     echo "Teacher environment ready: http://127.0.0.1:${LOCAL_PORT}"
     exit 0
   fi

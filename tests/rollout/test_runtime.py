@@ -27,5 +27,6 @@ def test_retry_exhaustion_stops_collection_without_accepting(tmp_path):
     client.close()
     with TeacherLedger(tmp_path, manifest(), resume=True) as resumed:
         assert resumed.accepted_count() == 0
+        assert resumed.get_state("status") == "infrastructure_interrupted"
         row = resumed.db.execute("SELECT status FROM attempts WHERE attempt_id=?", (attempt,)).fetchone()
         assert row[0] == "infrastructure_interrupted"

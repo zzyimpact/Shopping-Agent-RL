@@ -64,6 +64,8 @@ def test_ctrl_c_flushes_partial_and_prints_resume(tmp_path):
     record = json.loads(next(ledger.paths.attempts.glob("*.json")).read_text())
     assert guard.stop_requested is True
     assert record["status"] == "infrastructure_interrupted"
+    with TeacherLedger(tmp_path, manifest(), resume=True) as resumed:
+        assert resumed.get_state("status") == "infrastructure_interrupted"
     assert "Resume with:" in output.getvalue()
 
 

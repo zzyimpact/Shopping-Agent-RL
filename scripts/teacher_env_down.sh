@@ -10,13 +10,29 @@ STATE_DIR="${PROJECT_ROOT}/.cache/teacher_env"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 REMOTE_OWNED_FILE="${STATE_DIR}/remote_service_owned"
 
-if [[ -f "${TUNNEL_PID_FILE}" ]]; then
-  pid="$(cat "${TUNNEL_PID_FILE}")"
-  if kill -0 "${pid}" 2>/dev/null && ps -p "${pid}" -o command= | grep -Fq "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}"; then
-    kill "${pid}"
-    wait "${pid}" 2>/dev/null || true
+tunnel_matches() {
+  local pid="$1"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && \
+    ps -p "${pid}" -o command= 2>/dev/null | grep -Fq -- \
+      "-L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}"
+}
+
+stop_owned_tunnel() {
+  local pid="${1:-}"
+  if tunnel_matches "${pid}"; then
+    kill "${pid}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -9 "${pid}" 2>/dev/null || true
     echo "Stopped tunnel PID ${pid}"
   fi
+}
+
+if [[ -f "${TUNNEL_PID_FILE}" ]]; then
+  pid="$(cat "${TUNNEL_PID_FILE}")"
+  stop_owned_tunnel "${pid}"
   rm -f "${TUNNEL_PID_FILE}"
 fi
 

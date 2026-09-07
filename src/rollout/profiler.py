@@ -68,7 +68,7 @@ def _task_ids_hash(task_ids: list[str], *, trailing_newline: bool = False) -> st
 
 
 def _find_resume_run(data_root: Path, scenario: str, task_ids: list[str]) -> str | None:
-    candidates: list[str] = []
+    candidates: list[tuple[str, str]] = []
     scenario_root = data_root / scenario
     if not scenario_root.exists():
         return None
@@ -84,12 +84,14 @@ def _find_resume_run(data_root: Path, scenario: str, task_ids: list[str]) -> str
             state = db.execute("SELECT value FROM run_state WHERE key='status'").fetchone()
             db.close()
             if manifest.get("purpose") == "p3a_profiling" and manifest.get("scenario") == scenario and (not state or state[0] != "complete"):
-                candidates.append(directory.name)
+                status_text = state[0] if state else "incomplete"
+                candidates.append((directory.name, status_text))
         except Exception:
             continue
     if len(candidates) > 1:
-        raise ValueError("存在多个未完成 profiling run；请用 --run-id 明确指定")
-    return candidates[0] if candidates else None
+        listed = ", ".join(f"{run_id} (status={status})" for run_id, status in candidates)
+        raise ValueError("存在多个未完成 profiling run；请用 --run-id 明确指定。可选 run_id: " + listed)
+    return candidates[0][0] if candidates else None
 
 
 def _validate_resume_task_manifest(ledger: TeacherLedger, task_ids: list[str]) -> None:
@@ -204,6 +206,7 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 "success": False, "observations": [], "actions": []}
         if getattr(exc, "kind", None) == "infrastructure":
             ledger.mark_infrastructure_interrupted(attempt_id, {**base, "failure_class": "environment_infrastructure"})
+            ledger.set_state("status", "infrastructure_interrupted")
             raise ProfileStop("ShopSimulator infrastructure unavailable during reset") from exc
         ledger.save_attempt(attempt_id, base, status="environment_failure")
         return "environment_failure"
@@ -269,6 +272,7 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
             except TeacherEnvError as exc:
                 if getattr(exc, "kind", None) == "infrastructure":
                     ledger.mark_infrastructure_interrupted(attempt_id, {**record, "failure_class": "environment_infrastructure"})
+                    ledger.set_state("status", "infrastructure_interrupted")
                     raise ProfileStop("ShopSimulator infrastructure unavailable") from exc
                 if "malformed_action" in str(exc).lower() or "invalid_action" in str(exc).lower():
                     record["invalid_action_count"] += 1
@@ -411,6 +415,11 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
                 successes = _success_records(ledger, task_id)
         ledger.set_state("status", "complete")
     except (CollectionInfrastructureInterrupted, TeacherModelMismatch, ProfileStop) as exc:
+        if not ledger.closed and ledger.get_state("status") is None:
+            ledger.set_state(
+                "status",
+                "infrastructure_interrupted" if isinstance(exc, CollectionInfrastructureInterrupted) else "stopped",
+            )
         logger.line(f"[STOP] {exc}")
         return 2
     finally:

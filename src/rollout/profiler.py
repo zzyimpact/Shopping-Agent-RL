@@ -218,7 +218,6 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                                     status="provider_model_mismatch")
                 raise TeacherModelMismatch(f"teacher returned model {response.model!r}, expected {expected_model!r}")
             record["visible_responses"].append(response.text)
-            record["messages"].append({"role": "assistant", "content": response.text})
             record["api_diagnostics"].append({
                 "latency_s": response.latency_s, "retries": response.retries,
                 "input_tokens": response.input_tokens, "output_tokens": response.output_tokens,
@@ -261,7 +260,9 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
                 ledger.save_attempt(attempt_id, record, status="invalid_action")
                 return "invalid_action"
             messages = append_turn(messages, response.text, observation)
-            record["messages"].append({"role": "user", "content": observation})
+            # Keep the artifact's conversation exactly aligned with the next
+            # request; avoid duplicating the assistant turn in the audit copy.
+            record["messages"] = list(messages)
             ledger.save_progress(attempt_id, record)
             if result.payload.get("done") or result.payload.get("over"):
                 terminal = _terminal_payload(result.payload)

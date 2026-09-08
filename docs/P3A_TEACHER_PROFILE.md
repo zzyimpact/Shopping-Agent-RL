@@ -33,22 +33,22 @@
 
 ## Single & Personalization
 
-- Tasks: 24; genuine attempts: 68; infrastructure interruptions excluded: 0; provider/config errors excluded: 0
+- Tasks: 24; genuine attempts: 75; infrastructure interruptions excluded: 0; provider/config errors excluded: 0
 - First-attempt success (Wilson 95% CI): 0.750 [0.551, 0.880]
-- Success within 2 / 3 attempts: 0.750 [0.551, 0.880] / 0.792 [0.595, 0.908]
-- Eventual first-success: 0.792 [0.595, 0.908]; profile_unsolved: 5
-- First-success attempts: 30; attempts/success: 1.105; distribution: `{"1": 18, "3": 1}`
-- Second-demo: 19 tasks entered, 38 attempts, 34 successes; at-least-one-success: 0.947 [0.754, 0.991]; success/attempt: 0.895 [0.759, 0.958]
+- Success within 2 / 3 attempts: 0.792 [0.595, 0.908] / 0.833 [0.641, 0.933]
+- Eventual first-success: 0.833 [0.641, 0.933]; profile_unsolved: 4
+- First-success attempts: 35; attempts/success: 1.150; distribution: `{"1": 18, "2": 1, "3": 1}`
+- Second-demo: 20 tasks entered, 40 attempts, 36 successes; at-least-one-success: 0.950 [0.764, 0.991]; success/attempt: 0.900 [0.769, 0.960]
 - Exact duplicate pairs: 6; first-vs-second duplicate pairs: 6; provisional near-duplicate pairs: 14 (diagnostic only)
-- Action length mean/p50/p90/max: 5.491/4.000/7.000/24.000
-- Failure modes: `{"profile_unsolved": 3, "success": 53, "terminal_unsuccessful": 12}`
+- Action length mean/p50/p90/max: 6.482/4.000/10.000/26.000
+- Failure modes: `{"malformed_action": 1, "profile_unsolved": 4, "success": 56, "terminal_unsuccessful": 14}`
 
-- successful: wall p50/p90/max=31.840s/88.333s/190.256s; API p50/p90/max=5.361s/9.900s/120.579s; env-step p50/p90/max=0.132s/0.209s/1.892s; API wall proportion=0.980; tokens mean input/output=37871/598
-- genuine_failed: wall p50/p90/max=40.484s/76.943s/83.828s; API p50/p90/max=5.439s/8.891s/65.321s; env-step p50/p90/max=0.133s/0.220s/1.783s; API wall proportion=0.974; tokens mean input/output=39457/675
+- successful: wall p50/p90/max=32.841s/103.445s/228.871s; API p50/p90/max=5.374s/9.879s/120.579s; env-step p50/p90/max=0.133s/0.229s/1.892s; API wall proportion=0.979; tokens mean input/output=55872/701
+- genuine_failed: wall p50/p90/max=53.925s/83.828s/105.851s; API p50/p90/max=5.473s/10.427s/65.321s; env-step p50/p90/max=0.130s/0.225s/2.334s; API wall proportion=0.974; tokens mean input/output=48493/830
 - infrastructure_interrupted: wall p50/p90/max=N/A/N/A/N/A; API p50/p90/max=N/A/N/A/N/A; env-step p50/p90/max=N/A/N/A/N/A; API wall proportion=N/A; tokens mean input/output=N/A/N/A
-- Behavioral feature equal-pair counts (action/search/clicked-product/options/final-purchase): `{"clicked_products": 44, "final_purchase_asin": 48, "normalized_actions": 6, "search_queries": 7, "selected_options": 38}`
-- Infrastructure: retries=1; HTTP statuses={}
-- Hard tasks: `[{"task_id": "706570359072", "outcomes": {"terminal_unsuccessful": 2, "profile_unsolved": 1}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 24, "target_product_clicked": false, "last_reward": {"r_attribute": 0.6, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.5714285714285714, "r_option": 0.0, "r_price": 1.0, "r_strict": 0.0, "r_succ": 0.0}}, {"task_id": "904385584071", "outcomes": {"profile_unsolved": 1, "terminal_unsuccessful": 2}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 17, "target_product_clicked": false, "last_reward": {"r_attribute": 0.14285714285714285, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.2222222222222222, "r_option": 0.0, "r_price": 1.0, "r_strict": 0.0, "r_succ": 0.0}}, {"task_id": "933047766034", "outcomes": {"profile_unsolved": 1, "terminal_unsuccessful": 2}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 14, "target_product_clicked": true, "last_reward": {"r_attribute": 1.0, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.875, "r_option": 0.5, "r_price": 1.0, "r_strict": 0.5, "r_succ": 0.0}}]`
+- Behavioral feature equal-pair counts (action/search/clicked-product/options/final-purchase): `{"clicked_products": 44, "final_purchase_asin": 51, "normalized_actions": 6, "search_queries": 7, "selected_options": 38}`
+- Infrastructure: retries=2; HTTP statuses={}
+- Hard tasks: `[{"task_id": "706570359072", "outcomes": {"terminal_unsuccessful": 2, "profile_unsolved": 1}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 24, "target_product_clicked": false, "last_reward": {"r_attribute": 0.6, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.5714285714285714, "r_option": 0.0, "r_price": 1.0, "r_strict": 0.0, "r_succ": 0.0}}, {"task_id": "904385584071", "outcomes": {"profile_unsolved": 1, "terminal_unsuccessful": 2}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 17, "target_product_clicked": false, "last_reward": {"r_attribute": 0.14285714285714285, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.2222222222222222, "r_option": 0.0, "r_price": 1.0, "r_strict": 0.0, "r_succ": 0.0}}, {"task_id": "933047766034", "outcomes": {"profile_unsolved": 1, "terminal_unsuccessful": 2}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 14, "target_product_clicked": true, "last_reward": {"r_attribute": 1.0, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.875, "r_option": 0.5, "r_price": 1.0, "r_strict": 0.5, "r_succ": 0.0}}, {"task_id": "934909004241", "outcomes": {"terminal_unsuccessful": 2, "profile_unsolved": 1}, "max_steps_attempts": 0, "repeated_search": true, "repeated_click": true, "action_count": 36, "target_product_clicked": true, "last_reward": {"r_attribute": 1.0, "r_category": 1.0, "r_finish": 1.0, "r_loose": 0.7777777777777778, "r_option": 0.3333333333333333, "r_price": 1.0, "r_strict": 0.3333333333333333, "r_succ": 0.0}}]`
 
 ## Formal collection implications
 
@@ -57,7 +57,7 @@
 串行 rough projection（假设行为和延迟稳定）：
 
 - Single: 3000-task initial unique-success estimate=2375.000 (Wilson scaled range 1785.886–2722.655); 6000 successes≈81.270h; 12000 total≈162.539h。
-- Single&Pers: 3000-task initial unique-success estimate=2375.000 (Wilson scaled range 1785.886–2722.655); 6000 successes≈76.014h; 12000 total≈152.028h。
+- Single&Pers: 3000-task initial unique-success estimate=2500.000 (Wilson scaled range 1924.408–2799.640); 6000 successes≈87.714h; 12000 total≈175.429h。
 
 ## Excluded history
 

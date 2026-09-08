@@ -202,7 +202,14 @@ def collect_canonical(root: Path, selection: Mapping[str, Any], scenario: str) -
     selected = selection[scenario]
     runs = [Path(selected["base_run_path"])] + ([Path(selected["repair_run_path"])] if scenario == "single_persona" else [])
     excluded = set(selected.get("excluded_task_ids", []))
-    records = [item for run in runs for item in _records(run) if str(item.get("task_id")) not in excluded]
+    records = []
+    for index, run in enumerate(runs):
+        for item in _records(run):
+            # Overlay semantics: exclude contaminated IDs only from the base
+            # Persona run; the repair run is the canonical replacement.
+            if index == 0 and str(item.get("task_id")) in excluded:
+                continue
+            records.append(item)
     task_ids = [str(x) for x in selected["task_ids"]]
     outcome = _task_outcomes(records, task_ids)
     genuine = [x for x in records if _genuine(x)]

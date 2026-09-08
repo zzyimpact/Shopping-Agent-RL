@@ -536,6 +536,7 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
     if run_id is None:
         prefix = "p3a-repair-" if purpose == "p3a_repair" else "p3a-"
         run_id = prefix + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    logger.line(f"[RUN] purpose={purpose} run_id={run_id} tasks={len(task_ids)}")
     manifest = _manifest_for(run_id, scenario, task_data, health, context.source_hash,
                              env_endpoint, probe.payload, cfg)
     extra = EXTRA_IMMUTABLE

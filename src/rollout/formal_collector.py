@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -180,7 +181,41 @@ class CollectorLog:
                 handle.write(line + "\n")
                 handle.flush()
             if self.stream is not None:
-                print(line, file=self.stream, flush=True)
+                terminal = self._terminal_line(event, base)
+                if terminal:
+                    print(terminal, file=self.stream, flush=True)
+
+    def _terminal_line(self, event: str, fields: Mapping[str, Any]) -> str | None:
+        """Keep live output close to P3a profiling without echoing the full log."""
+        if event in {"RUN_START", "RESUME"}:
+            return f"[{event}] scenario={self.scenario} run_id={self.run_id} workers={fields.get('workers', '-')}"
+        if event == "PASS_START":
+            return f"[{self.scenario}] Pass {fields.get('pass', '-')} started"
+        if event == "ATTEMPT_START":
+            return (
+                f"[{self.scenario}] Task {fields.get('task', '-')} | Pass {fields.get('pass', '-')} "
+                f"| Attempt {fields.get('attempt', '-')}"
+            )
+        if event == "API_RETRY":
+            return (
+                f"[API] task={fields.get('task', '-')} {fields.get('classification', 'retry')} "
+                f"| retry={fields.get('retry_ordinal', '-')}"
+            )
+        if event in {"ACCEPT", "ATTEMPT_FAILURE", "REJECT_EXACT_DUPLICATE"}:
+            outcome = {
+                "ACCEPT": "accepted", "ATTEMPT_FAILURE": fields.get("classification", "failed"),
+                "REJECT_EXACT_DUPLICATE": "exact_duplicate",
+            }[event]
+            return (
+                f"[{self.scenario}] Task {fields.get('task', '-')} finished | outcome={outcome} "
+                f"| wall={float(fields.get('wall_s', 0.0)):.2f}s "
+                f"| API={float(fields.get('api_s', 0.0)):.2f}s | steps={fields.get('steps', 0)}"
+            )
+        if event == "PROGRESS":
+            return f"[PROGRESS] pass={fields.get('pass', '-')} accepted={fields.get('accepted', 0)}"
+        if event in {"CTRL_C", "INFRA_STOP", "QUOTA_UNMET", "COMPLETE"}:
+            return f"[{event}] pass={fields.get('pass', '-')} accepted={fields.get('accepted', '-')}"
+        return None
 
 
 @dataclass(frozen=True)
@@ -351,13 +386,22 @@ def reconcile_attempts(
         )
         if applied_status == "accepted":
             logger.event("ACCEPT", pass_name=work["pass"], task_id=work["task_id"],
-                         attempt=work["attempt_ordinal"])
+                         attempt=work["attempt_ordinal"],
+                         wall_s=record.get("trajectory_attempt_wall_time_s", 0.0),
+                         api_s=record.get("api_latency_total_s", 0.0),
+                         steps=len(record.get("actions", [])))
         elif applied_status == "rejected_exact_duplicate":
             logger.event("REJECT_EXACT_DUPLICATE", pass_name=work["pass"],
-                         task_id=work["task_id"], attempt=work["attempt_ordinal"])
+                         task_id=work["task_id"], attempt=work["attempt_ordinal"],
+                         wall_s=record.get("trajectory_attempt_wall_time_s", 0.0),
+                         api_s=record.get("api_latency_total_s", 0.0),
+                         steps=len(record.get("actions", [])))
         elif applied_status not in INFRA_STATUSES:
             logger.event("ATTEMPT_FAILURE", pass_name=work["pass"], task_id=work["task_id"],
-                         attempt=work["attempt_ordinal"], classification=applied_status)
+                         attempt=work["attempt_ordinal"], classification=applied_status,
+                         wall_s=record.get("trajectory_attempt_wall_time_s", 0.0),
+                         api_s=record.get("api_latency_total_s", 0.0),
+                         steps=len(record.get("actions", [])))
     state["active_task_ids"] = []
     dump_state(ledger, state)
 
@@ -1006,7 +1050,7 @@ def run_from_configuration(
         extra_immutable_fields=FORMAL_EXTRA_IMMUTABLE,
     )
     log_path = data_root / "collector.log"
-    logger = CollectorLog(log_path, scenario=scenario, run_id=resolved_run_id)
+    logger = CollectorLog(log_path, scenario=scenario, run_id=resolved_run_id, stream=sys.stdout)
     resume_command = (
         f"python3 scripts/collect_teacher.py --scenario {scenario} "
         f"--workers {workers} --run-id {resolved_run_id} --resume"

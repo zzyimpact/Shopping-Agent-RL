@@ -294,20 +294,22 @@ profiling operational limits，**不是**正式 collection caps。P3a 输出物�
 
 ## 9.3 P3b Collection policy freeze — COMPLETE
 
-`p3b-v1` 已冻结：每 scenario hard target 6,000 accepted trajectories；约 3,000 unique 是
+`p3b-v1.1` 已冻结（保留 `p3b-v1` 历史，仅将 formal transport 改为
+`chat_completions`）：每 scenario hard target 6,000 accepted trajectories；约 3,000 unique 是
 coverage target；default workers=8；Pass A first-success cap=2、deterministic same-stratum
 reserve；Pass B 最多 2 次；B+C post-success budget=3；每 task accepted 1/2/3；exact
 behavioral duplicate hard reject、near duplicate diagnostic-only。Machine-readable source of
-truth 是 `configs/teacher/formal_collection_p3b_v1.yaml`，解释与证据见
-`docs/P3B_COLLECTION_POLICY.md`。
+truth 是 `configs/teacher/formal_collection_p3b_v1_1.yaml`，完整 v1 policy 与 hash 仍保留；
+delta 见 `docs/P3B_COLLECTION_POLICY_V1_1.md`。
 
-## 9.4 P3c Formal Collector Implementation — NEXT
+## 9.4 P3c Formal Collector Implementation — READY / AWAITING USER SMOKE
 
-下一阶段实现 formal A/B/C scheduler、default 8-worker queue、deterministic reserve、
+已实现 formal A/B/C scheduler、default 8-worker queue、deterministic reserve、
 acceptance/duplicate/budget accounting、durable resume/global stop、append-only
 `data/teacher_raw/collector.log`、`scripts/inspect_teacher_run.py --latest/--last N` 与 immutable
-policy version/hash。先跑 no-paid tests，再由用户触发 tiny Responses compatibility/formal
-smoke；不得在实现阶段直接开始 6,000 trajectory collection。
+policy version/hash。No-paid targeted validation 已完成；下一步仅由用户触发 tiny formal
+pipeline smoke（不再做 Responses compatibility smoke）。tiny smoke 验收前不得开始 6,000
+trajectory collection。实现说明见 `docs/P3C_FORMAL_COLLECTOR.md`。
 
 ## 9.5 P3d Dataset freeze
 

@@ -22,7 +22,7 @@ DEFAULT_POLICY_PATH = (
     Path(__file__).resolve().parents[2]
     / "configs"
     / "teacher"
-    / "formal_collection_p3b_v1.yaml"
+    / "formal_collection_p3b_v1_1.yaml"
 )
 
 
@@ -87,13 +87,16 @@ def _walk_strings(value: Any) -> list[str]:
 
 
 def validate_collection_policy(policy: Mapping[str, Any]) -> None:
-    """验证 p3b-v1 的 frozen invariants；不执行 collection。"""
+    """验证受支持的 frozen P3b policy invariants；不执行 collection。"""
+    version = _at(policy, "identity", "policy_version")
+    if version not in {"p3b-v1", "p3b-v1.1"}:
+        raise CollectionPolicyError(f"不支持的 policy version: {version}")
+    api_style = "responses" if version == "p3b-v1" else "chat_completions"
     expected = {
-        ("identity", "policy_version"): "p3b-v1",
         ("identity", "policy_status"): "frozen",
         ("identity", "seed"): 1,
         ("teacher", "model"): "gpt-5.6-sol",
-        ("teacher", "api_style"): "responses",
+        ("teacher", "api_style"): api_style,
         ("teacher", "reasoning_effort"): "high",
         ("teacher", "request_semantics"): "p3a-compatible",
         ("concurrency", "workers_default"): 8,
@@ -124,6 +127,9 @@ def validate_collection_policy(policy: Mapping[str, Any]) -> None:
         raise CollectionPolicyError("scenario 必须是 single 与 single_persona")
     if _at(policy, "protocol", "environment_version") != "task-scoped-v3-multisession":
         raise CollectionPolicyError("formal environment 必须使用 multi-session v3")
+    max_actions = policy.get("protocol", {}).get("max_action_steps", 30)
+    if max_actions != 30:
+        raise CollectionPolicyError("max action steps 必须固定为 30")
 
     workers = _at(policy, "concurrency", "workers_default")
     if not _at(policy, "concurrency", "workers_min") <= workers <= _at(

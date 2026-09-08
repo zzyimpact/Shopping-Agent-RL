@@ -2,8 +2,8 @@
 
 > **Work in Progress / 项目仍在开发中**
 
-当前状态：P2 environment/reward pipeline 已完成；P3 teacher-data pipeline 正在进行
-（P3-0 已完成，P3a profiler 已准备好，真实 profiling 由用户手动触发）。项目尚未完成最终
+当前状态：P2、P3-0、P3a、P3b 已完成；P3c formal collector implementation 已准备好，
+等待用户执行 tiny paid formal smoke。项目尚未完成最终
 teacher 数据集、训练或实验结果，本文不宣称最终性能。
 
 ## A ShopSimulator RL Post-Training Reproduction
@@ -12,5 +12,6 @@ teacher 数据集、训练或实验结果，本文不宣称最终性能。
 
 项目定义见 [DESIGN.md](DESIGN.md)，实施顺序与验收边界见 [WORKFLOW.md](WORKFLOW.md)。
 
-当前状态：P0/P1/P2 已完成；P3 teacher-data pipeline in progress。训练、正式 teacher
+当前状态：P0/P1/P2 已完成；P3 teacher-data pipeline in progress。P3c 尚待 tiny smoke
+验收，训练、正式 teacher
 collection 与最终评测仍未开始。

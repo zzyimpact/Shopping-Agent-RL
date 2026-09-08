@@ -11,11 +11,22 @@ EXPECTED_ENVIRONMENT_VERSION="task-scoped-v3-multisession"
 EXPECTED_POLICY_OBSERVATION_VERSION="single-eval-policy-v1"
 EXPECTED_PROFILER_PROTOCOL_VERSION="p3a-visible-action-v2"
 STATE_DIR="${PROJECT_ROOT}/.cache/teacher_env"
+MANIFEST_CACHE="${PROJECT_ROOT}/.cache/teacher_manifests"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 TUNNEL_LOG="${STATE_DIR}/tunnel.log"
 REMOTE_OWNED_FILE="${STATE_DIR}/remote_service_owned"
 TUNNEL_CREATED=0
 mkdir -p "${STATE_DIR}"
+mkdir -p "${MANIFEST_CACHE}"
+
+# Formal collector 只需要 P2 已生成的轻量 task manifests。同步到 ignored local
+# cache，不复制 catalog/search runtime，也不改变 remote service semantics。
+for manifest_name in \
+  train_single.json train_single_persona.json \
+  sft_task_manifest_single.json sft_task_manifest_single_persona.json; do
+  scp -q "${REMOTE_HOST}:/root/data/shopsim/manifests/${manifest_name}" \
+    "${MANIFEST_CACHE}/${manifest_name}"
+done
 
 tunnel_matches() {
   local pid="$1"

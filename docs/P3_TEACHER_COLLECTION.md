@@ -1,7 +1,7 @@
 # P3 Teacher Collection（P3-0 基础设施）
 
-**状态**：P3-0 完成；P3a profiler 已实现并等待用户手动执行真实 profiling。本文不表示
-P3a 结果或正式 collection 已完成。
+**状态**：P3-0 与 canonical P3a 完成；当前文档同时记录 P3a summary metric correction
+和 concurrency probe infrastructure。本文不表示 P3b policy 或正式 collection 已冻结。
 
 ## 1. 架构
 
@@ -12,7 +12,7 @@ local controller → teacher relay API
 local controller → SSH local port forward → remote ShopSimulator HTTP service
 ```
 
-ShopSimulator、Lucene、Pyserini、Java、spaCy、Catalog runtime 不在本地复制。Remote service 绑定 `127.0.0.1`，默认端口为 `5100`；本地 tunnel 默认端口为 `5500`。task-scoped reset 只 materialize 当前 TRAIN task 的 goal，但 search 仍使用完整 23,421-document Catalog-Fine Lucene index，不使用 gold lookup 或小 catalog 替代正式 search universe。
+ShopSimulator、Lucene、Pyserini、Java、spaCy、Catalog runtime 不在本地复制。Remote service 绑定 `127.0.0.1`，默认端口为 `5100`；本地 tunnel 默认端口为 `5500`。当前 remote environment version 为 `task-scoped-v3-multisession`：一个 service process 共享完整 Catalog-Fine/Lucene runtime，通过 external session UUID → internal slot 绑定多个轻量 `WebAgentTextEnv` session；reset/step/release 在 global `RLock` 下串行执行，昂贵的 teacher HTTP waits 留在 local worker threads 中并行。task-scoped reset 只 materialize 当前 TRAIN task 的 goal，但 search 仍使用完整 23,421-document Catalog-Fine Lucene index，不使用 gold lookup 或小 catalog 替代正式 search universe。
 
 ## 2. Teacher relay 配置
 
@@ -42,6 +42,8 @@ logs/
 
 accepted JSON 先写入临时文件并 flush/fsync，再用原子 rename 发布，之后才在 SQLite transaction 中标记 accepted。partial、invalid-action、max-steps 和 infrastructure interruption 仅进入 attempts，永远不能直接进入 SFT。`--resume` 保留旧 artifact，不覆盖 accepted 数据；immutable config（scenario、teacher model、API style、reasoning、prompt/config hash、ShopSimulator fingerprint、environment/reward version）不一致时拒绝 resume。SIGINT 视为 graceful stop：保存当前 partial attempt、提交 SQLite、flush 日志并打印 resume 命令；不尝试恢复远程环境的内存 step，而是下次 reset 后开启新 attempt。
 
+`TeacherLedger` 的 SQLite connection 使用 WAL、`check_same_thread=False` 和实例级 `RLock`，每个短 transaction/JSON publish 都在同一边界内完成；并发 scheduler 必须在最终 close 前 join workers。
+
 ## 4. Environment smoke
 
 ```bash
@@ -68,11 +70,38 @@ Remote provenance：ShopSimulator public snapshot 不包含 `shop_env/search_eng
 
 未来 diversity fingerprint 至少包含 normalized action sequence、normalized search queries、clicked product IDs、selected options 和 trajectory length；Thought 措辞差异不视为策略差异。Teacher 只使用 visible `Thought: 简短 action rationale` 与 `Action:` protocol，不获取或保存 hidden chain-of-thought。Prompt 优先复用 upstream Single/Persona system prompt 与完整 visible conversation history；Persona 额外注入 `user_persona`，不添加改变 policy distribution 的“生成 SFT 数据”指令。
 
-## 6. Stages
+## 6. P3a metric definitions
+
+Canonical summary 不改变任何 trajectory，只修正统计口径：
+
+- `solved_tasks_attempts_to_success` 只对最终 solved task 统计首次 success ordinal；`first_phase_attempt_burden_per_acquired_success` 为所有 genuine first-success attempts 除以 acquired first successes，未把 unsolved task 的 retry cost 隐藏在 `attempts/success` 名称下。
+- Diversity denominator 是同 task 内所有 successful trajectory pairs，且单列 first-second 与 second-second；Thought 文本不参与 behavioral duplicate。
+- `api_call_latency` 是单次 API call，`api_total_time_per_attempt` 是一条 trajectory attempt 的 API wall time，`trajectory_attempt_wall_time` 是整条 attempt wall time。
+- `success_only_lower_bound_*` 只使用成功 attempt 的 wall time；`observed_p3a_cost_aware_*` 使用 canonical P3a 所有 genuine attempts 的 wall cost / acquired successful trajectory。两者都是 rough baseline，不是 formal P3c prediction。
+- `task_outcomes.profile_unsolved` 与 `attempt_outcomes.max_steps/terminal_unsuccessful/malformed_action/...` 分层报告。旧 artifacts 缺失完整 retry event 时报告 telemetry incomplete，不人工补猜；新请求保存 redacted retry event metadata。
+
+## 7. Concurrency probe architecture
+
+`src/rollout/concurrency.py` 提供 bounded `ThreadPoolExecutor`、`--workers N`（当前安全上限
+32）和 global stop primitive。任一 worker 遇到 exhausted infrastructure/provider protocol
+failure 后，不再让 queued task 发起新外部请求；in-flight request 可返回并落盘。每个 worker
+使用独立 `TeacherClient`/HTTP client；probe artifacts 写到
+`data/teacher_concurrency_probe/`，不进入 `teacher_profile`、SFT 或 canonical summary。
+
+这是 concurrency probe infrastructure，不是正式 collection scheduler。candidate `N=10`
+仅用于后续测量，formal worker count 仍由 P3b 决定。
+
+远端 non-paid isolation stress 已验证 10 个混合 Single/Persona session：slot/session 唯一，
+正常 search/product/option/Buy Now 路径互不串 task/goal，释放一个 session 不影响其余 session，
+最终 active session 为 0；10-session 期间 process RSS/cgroup memory 未出现增长。该结果只证明
+环境隔离与 runtime 复用，不是 teacher success-rate 或 throughput 结论。
+
+## 8. Stages
 
 ```text
-P3-0  API & collection infrastructure smoke       ← 本轮
-P3a   Teacher profiling（小规模、单 worker）
+P3-0  API & collection infrastructure smoke       ← complete
+P3a   Teacher profiling（canonical single worker） ← complete
+P3a-C Concurrency extension/probe                 ← current infrastructure
 P3b   Collection policy freeze
 P3c   Formal collection
 P3d   Dataset freeze
@@ -95,11 +124,11 @@ prompting，不保存 hidden chain-of-thought。
 本轮明确不执行真实 teacher request、批量 trajectory、SFT formatter/training、GRPO、GPU 或模型 inference；
 用户完成两个 scenario 后，再用 `scripts/summarize_teacher_profile.py` 生成真实报告供 P3b 分析。
 
-## 7. Backup
+## 9. Backup
 
 `bash scripts/sync_teacher_data.sh [--dry-run]` 使用 rsync 从本地 `data/teacher_raw/` 增量同步至 `rtx-pro-6000-3:/root/data/shopsim/teacher_raw/`，不使用 `--delete`，不传输 `.env.teacher`，失败不会修改本地 canonical data。
 
-## 8. P3a user-triggered profiling
+## 10. P3a user-triggered profiling
 
 完成本地 `.env.teacher` 配置并确认 relay 后，由用户手动执行：
 

@@ -24,9 +24,11 @@ class EnvResult:
 
 class TeacherEnvClient:
     def __init__(self, base_url: str = "http://127.0.0.1:5500", *, timeout: float = 60.0,
-                 client: httpx.Client | None = None):
+                 client: httpx.Client | None = None,
+                 expected_environment_version: str | None = "task-scoped-v3-multisession"):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)
+        self.expected_environment_version = expected_environment_version
 
     def close(self) -> None:
         self.client.close()
@@ -63,10 +65,27 @@ class TeacherEnvClient:
         return self._request("GET", "/health")
 
     def reset(self, scenario: str, task_id: str) -> EnvResult:
-        return self._request("POST", "/reset", {"scenario": scenario, "task_id": task_id})
+        result = self._request("POST", "/reset", {"scenario": scenario, "task_id": task_id})
+        if result.payload.get("task_id") != str(task_id) or result.payload.get("scenario") != scenario:
+            raise TeacherEnvError("ShopSimulator session identity mismatch after reset", kind="infrastructure")
+        if (self.expected_environment_version is not None and
+                result.payload.get("environment_version") != self.expected_environment_version):
+            raise TeacherEnvError("ShopSimulator environment version mismatch after reset", kind="infrastructure")
+        return result
 
-    def step(self, session_id: str, response: str) -> EnvResult:
-        return self._request("POST", "/step", {"session_id": session_id, "response": response})
+    def step(self, session_id: str, response: str, *, expected_task_id: str | None = None,
+             expected_scenario: str | None = None) -> EnvResult:
+        result = self._request("POST", "/step", {"session_id": session_id, "response": response})
+        if result.payload.get("session_id") != session_id:
+            raise TeacherEnvError("ShopSimulator session identity mismatch after step", kind="infrastructure")
+        if expected_task_id is not None and result.payload.get("task_id") != str(expected_task_id):
+            raise TeacherEnvError("ShopSimulator task identity mismatch after step", kind="infrastructure")
+        if expected_scenario is not None and result.payload.get("scenario") != expected_scenario:
+            raise TeacherEnvError("ShopSimulator scenario identity mismatch after step", kind="infrastructure")
+        if (self.expected_environment_version is not None and
+                result.payload.get("environment_version") != self.expected_environment_version):
+            raise TeacherEnvError("ShopSimulator environment version mismatch after step", kind="infrastructure")
+        return result
 
     def release(self, session_id: str) -> EnvResult:
         return self._request("POST", "/release", {"session_id": session_id})

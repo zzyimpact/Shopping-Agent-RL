@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 
 from rollout.progress import ProgressLogger
 from rollout.storage import GracefulCollectionStop, ResumeConfigMismatch, TeacherLedger
@@ -111,3 +112,17 @@ def test_profile_unsolved_updates_artifact_and_ledger(tmp_path):
         payload = json.loads((ledger.paths.attempts / f"{attempt}.json").read_text())
         assert payload["status"] == "profile_unsolved"
         assert payload["termination_reason"] == "profile_unsolved"
+
+
+def test_shared_ledger_supports_concurrent_short_transactions(tmp_path):
+    with TeacherLedger(tmp_path, manifest()) as ledger:
+        def write(index):
+            attempt = ledger.start_attempt(f"task-{index}")
+            ledger.save_attempt(attempt, {"events": [{"index": index}]}, status="success")
+            ledger.accept(attempt, {"messages": [], "reward": {"r_succ": 1}})
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            list(pool.map(write, range(20)))
+        assert ledger.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 20
+        assert ledger.accepted_count() == 20
+        assert len(list(ledger.paths.accepted.glob("*.json"))) == 20

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from rollout.diversity import behavior_fingerprint, exact_duplicate, similarity_features  # noqa: E402
 
-INFRA_STATUSES = {"infrastructure_interrupted", "provider_config_error"}
+INFRA_STATUSES = {"infrastructure_interrupted", "provider_config_error", "provider_protocol_error"}
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -179,6 +179,21 @@ def _fingerprint(record: Mapping[str, Any]) -> dict[str, Any]:
     return behavior_fingerprint(record.get("actions", []), final_purchase_asin=purchase.get("asin"))
 
 
+def _retry_events(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Read both per-response and exhausted-request telemetry without guessing."""
+    values: list[dict[str, Any]] = []
+    for item in record.get("retry_events", []) if isinstance(record.get("retry_events"), list) else []:
+        if isinstance(item, Mapping):
+            values.append(dict(item))
+    for diagnostic in record.get("api_diagnostics", []):
+        if not isinstance(diagnostic, Mapping):
+            continue
+        for item in diagnostic.get("retry_events", []) if isinstance(diagnostic.get("retry_events"), list) else []:
+            if isinstance(item, Mapping):
+                values.append(dict(item))
+    return values
+
+
 def _task_outcomes(records: list[dict[str, Any]], task_ids: list[str]) -> dict[str, Any]:
     by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in records:
@@ -226,21 +241,38 @@ def collect_canonical(root: Path, selection: Mapping[str, Any], scenario: str) -
     task_fps: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
     for item in successful:
         task_fps[str(item.get("task_id"))].append((str(item.get("attempt_phase")), _fingerprint(item)))
-    duplicate_pairs = second_duplicate = near_count = 0
+    pair_count = first_first_pairs = first_second_pairs = second_second_pairs = 0
+    duplicate_pairs = first_first_duplicate = first_second_duplicate = second_second_duplicate = near_count = 0
+    first_first_near = first_second_near = second_second_near = 0
     feature_equal = Counter()
     for entries in task_fps.values():
         for i in range(len(entries)):
             for j in range(i):
+                pair_type = (
+                    "first_second" if {entries[i][0], entries[j][0]} == {"first_success", "second_demo"}
+                    else "second_second" if entries[i][0] == entries[j][0] == "second_demo"
+                    else "first_first" if entries[i][0] == entries[j][0] == "first_success"
+                    else "other"
+                )
+                if pair_type == "first_second": first_second_pairs += 1
+                elif pair_type == "second_second": second_second_pairs += 1
+                elif pair_type == "first_first": first_first_pairs += 1
+                else: continue
+                pair_count += 1
                 if exact_duplicate(entries[i][1], entries[j][1]):
                     duplicate_pairs += 1
-                    if entries[i][0] == "second_demo" or entries[j][0] == "second_demo":
-                        second_duplicate += 1
+                    if pair_type == "first_second": first_second_duplicate += 1
+                    elif pair_type == "second_second": second_second_duplicate += 1
+                    else: first_first_duplicate += 1
                 left, right = entries[i][1], entries[j][1]
                 for key in ("normalized_actions", "search_queries", "clicked_products", "selected_options", "final_purchase_asin"):
                     if left.get(key) == right.get(key):
                         feature_equal[key] += 1
                 if similarity_features(entries[i][1], entries[j][1]).get("provisional_near_duplicate"):
                     near_count += 1
+                    if pair_type == "first_second": first_second_near += 1
+                    elif pair_type == "second_second": second_second_near += 1
+                    else: first_first_near += 1
     actions = [float(x.get("action_steps")) for x in successful if isinstance(x.get("action_steps"), (int, float))]
     groups = {"successful": successful, "genuine_failed": [x for x in genuine if x.get("success") is not True], "infrastructure_interrupted": infra}
     timing, tokens = {}, {}
@@ -249,11 +281,20 @@ def collect_canonical(root: Path, selection: Mapping[str, Any], scenario: str) -
         env = [float(d["latency_s"]) for r in rows for d in r.get("environment_diagnostics", []) if isinstance(d.get("latency_s"), (int, float))]
         walls = [w for r in rows if (w := _wall(r)) is not None]
         api_total = sum(float(r.get("api_latency_total_s", 0) or 0) for r in rows)
-        timing[name] = {"api_latency_s": _stats(api), "environment_steps_latency_s": _stats(env), "total_wall_s": _stats(walls), "api_wall_proportion": api_total / sum(walls) if sum(walls) else None}
+        timing[name] = {"api_call_latency": _stats(api), "environment_step_latency": _stats(env), "trajectory_attempt_wall_time": _stats(walls), "api_total_time_per_attempt": _stats([float(r.get("api_latency_total_s", 0) or 0) for r in rows]), "api_wall_proportion": api_total / sum(walls) if sum(walls) else None}
         ins = [float(r.get("total_input_tokens", 0) or 0) for r in rows]; outs = [float(r.get("total_output_tokens", 0) or 0) for r in rows]
         tokens[name] = {"input": _stats(ins), "output": _stats(outs), "total": _stats([i + o for i, o in zip(ins, outs)])}
     terminal = Counter(str(x.get("termination_reason", x.get("status", "unknown"))) for x in genuine)
-    infra_http = Counter(str(d.get("http_status")) for r in infra for d in r.get("api_diagnostics", []) if d.get("http_status") is not None)
+    all_retry_events = [event for record in records for event in _retry_events(record)]
+    transient_http = {"408", "429", "500", "502", "503", "504"}
+    infra_http = Counter(
+        str(d.get("http_status"))
+        for r in infra
+        for d in r.get("api_diagnostics", [])
+        if d.get("http_status") is not None
+        and (int(d.get("retries", 0) or 0) > 0 or str(d.get("http_status")) in transient_http)
+    )
+    infra_http.update(str(event["status_code"]) for event in all_retry_events if event.get("status_code") is not None)
     hard = []
     for task in task_ids:
         rows = outcome["by_task"].get(task, [])
@@ -263,25 +304,43 @@ def collect_canonical(root: Path, selection: Mapping[str, Any], scenario: str) -
     success_wall = [_wall(x) for x in successful if _wall(x) is not None]
     failed_wall = [_wall(x) for x in groups["genuine_failed"] if _wall(x) is not None]
     success_mean = statistics.mean(success_wall) if success_wall else None
+    acquired_successes = len(successful)
+    total_genuine_wall = sum(_wall(x) or 0.0 for x in genuine)
+    success_only_per_success = success_mean
+    observed_cost_per_success = (total_genuine_wall / acquired_successes) if acquired_successes else None
     projection = {
         "observed_eventual_success_rate": len(first_success) / len(task_ids) if task_ids else None,
         "eventual_success_rate_wilson": _wilson(len(first_success), len(task_ids)),
         "rough_initial_unique_successes_for_3000_tasks": 3000 * len(first_success) / len(task_ids) if task_ids else None,
         "rough_initial_unique_successes_wilson_low_high": [3000 * _wilson(len(first_success), len(task_ids))["low"], 3000 * _wilson(len(first_success), len(task_ids))["high"]] if task_ids else [None, None],
-        "successful_attempt_mean_wall_s": success_mean,
+        "success_only_lower_bound_attempt_wall_s": success_mean,
         "genuine_failed_attempt_mean_wall_s": statistics.mean(failed_wall) if failed_wall else None,
-        "serial_6000_successes_hours": (6000 * success_mean / 3600) if success_mean is not None else None,
-        "serial_12000_successes_hours": (12000 * success_mean / 3600) if success_mean is not None else None,
-        "note": "rough serial baseline only; assumes P3a behavior/latency remains stable and excludes formal policy decisions",
+        "success_only_lower_bound_6000_hours": (6000 * success_only_per_success / 3600) if success_only_per_success is not None else None,
+        "success_only_lower_bound_12000_hours": (12000 * success_only_per_success / 3600) if success_only_per_success is not None else None,
+        "observed_p3a_genuine_wall_s": total_genuine_wall,
+        "observed_wall_cost_per_acquired_success_s": observed_cost_per_success,
+        "observed_p3a_cost_aware_6000_hours": (6000 * observed_cost_per_success / 3600) if observed_cost_per_success is not None else None,
+        "observed_p3a_cost_aware_12000_hours": (12000 * observed_cost_per_success / 3600) if observed_cost_per_success is not None else None,
+        "note": "success-only is a lower bound; cost-aware uses observed genuine P3a attempts. Neither is a formal P3c prediction; retry/reserve policy remains unfrozen.",
     }
+    solved_ordinals = list(outcome["first_success_ordinal"].values())
+    first_phase_attempts = sum(outcome["first_counts"].values())
+    solved_attempts = {
+        "mean": statistics.mean(solved_ordinals) if solved_ordinals else None,
+        "distribution": dict(Counter(solved_ordinals)),
+    }
+    attempt_outcomes = Counter(str(x.get("termination_reason", x.get("status", "unknown"))) for x in genuine)
+    task_outcome_counts = Counter("solved" if task in first_success else "profile_unsolved" for task in task_ids)
     return {
         "scenario": scenario, "tasks": len(task_ids), "task_ids": task_ids,
         "records": {"total": len(records), "genuine": len(genuine), "infrastructure_or_config": len(infra), "infrastructure_interrupted": len(interrupted), "provider_config_error": len(config_errors)},
-            "first_success": {"first_attempt": _wilson(first_attempt_success, len(task_ids)), "within_2": _wilson(within2, len(task_ids)), "within_3": _wilson(within3, len(task_ids)), "eventual": _wilson(len(first_success), len(task_ids)), "successes": len(first_success), "profile_unsolved": len(task_ids) - len(first_success), "genuine_attempts": sum(outcome["first_counts"].values()), "attempts_per_success": statistics.mean(outcome["first_success_ordinal"].values()) if first_success else None, "attempt_distribution": dict(Counter(outcome["first_success_ordinal"].values()))},
+            "first_success": {"first_attempt": _wilson(first_attempt_success, len(task_ids)), "within_2": _wilson(within2, len(task_ids)), "within_3": _wilson(within3, len(task_ids)), "eventual": _wilson(len(first_success), len(task_ids)), "successes": len(first_success), "profile_unsolved": len(task_ids) - len(first_success), "genuine_attempts": first_phase_attempts, "attempts_per_success": statistics.mean(outcome["first_success_ordinal"].values()) if first_success else None, "attempt_distribution": dict(Counter(outcome["first_success_ordinal"].values())), "solved_tasks_attempts_to_success": solved_attempts, "first_phase_attempt_burden_per_acquired_success": (first_phase_attempts / len(first_success)) if first_success else None},
         "second_demo": {"tasks_entering": len(first_success), "attempts": len(second), "successes": len(second_success), "tasks_with_success": len({str(x.get("task_id")) for x in second_success}), "at_least_one_success": _wilson(len({str(x.get("task_id")) for x in second_success}), len(first_success)), "success_per_attempt": _wilson(len(second_success), len(second))},
-        "diversity": {"successful_trajectories": len(successful), "exact_duplicate_pairs": duplicate_pairs, "first_vs_second_exact_duplicate_pairs": second_duplicate, "exact_duplicate_rate": duplicate_pairs / len(successful) if successful else None, "provisional_near_duplicate_pairs": near_count, "behavioral_feature_equal_pair_counts": dict(feature_equal), "note": "provisional near-duplicate is diagnostic only; no formal P3c threshold is frozen", "action_length": _stats(actions)},
-        "failures": {"termination": dict(terminal), "hard_tasks": hard}, "timing": timing, "tokens": tokens, "formal_collection_projection": projection,
-        "infrastructure": {"http_status_counts": dict(infra_http), "retry_total": sum(int(x.get("infrastructure_retries", 0) or 0) for x in records), "interrupted_attempts": len(interrupted), "provider_config_errors": len(config_errors)},
+        "diversity": {"successful_trajectories": len(successful), "all_pair_count": pair_count, "all_exact_duplicate_count": duplicate_pairs, "all_exact_duplicate_rate": duplicate_pairs / pair_count if pair_count else None, "first_first_pair_count": first_first_pairs, "first_first_exact_duplicate_count": first_first_duplicate, "first_first_exact_duplicate_rate": first_first_duplicate / first_first_pairs if first_first_pairs else None, "first_second_pair_count": first_second_pairs, "first_second_exact_duplicate_count": first_second_duplicate, "first_second_exact_duplicate_rate": first_second_duplicate / first_second_pairs if first_second_pairs else None, "second_second_pair_count": second_second_pairs, "second_second_exact_duplicate_count": second_second_duplicate, "second_second_exact_duplicate_rate": second_second_duplicate / second_second_pairs if second_second_pairs else None, "provisional_near_duplicate_count": near_count, "provisional_near_duplicate_denominator": pair_count, "provisional_near_duplicate_rate": near_count / pair_count if pair_count else None, "provisional_near_duplicate_by_pair_type": {"first_first_count": first_first_near, "first_second_count": first_second_near, "second_second_count": second_second_near}, "behavioral_feature_equal_pair_counts": dict(feature_equal), "note": "provisional near-duplicate is diagnostic only; no formal P3c threshold is frozen", "action_length": _stats(actions)},
+        "task_outcomes": {"solved": task_outcome_counts["solved"], "profile_unsolved": task_outcome_counts["profile_unsolved"]},
+        "attempt_outcomes": dict(attempt_outcomes),
+        "failures": {"task_outcomes": {"solved": task_outcome_counts["solved"], "profile_unsolved": task_outcome_counts["profile_unsolved"]}, "attempt_outcomes": dict(attempt_outcomes), "termination": dict(terminal), "hard_tasks": hard}, "timing": timing, "tokens": tokens, "formal_collection_projection": projection,
+        "infrastructure": {"http_status_counts": dict(infra_http), "retry_total": sum(int((x.get("infrastructure_retries") or x.get("retries", 0)) or 0) for x in records), "retry_event_count": len(all_retry_events), "retry_event_telemetry_complete": all((int((x.get("infrastructure_retries") or x.get("retries", 0)) or 0) == 0 or bool(_retry_events(x))) for x in records), "historical_retry_event_note": "旧 artifacts 仅保存 final response retry count；缺少完整 retry event 时不补猜", "interrupted_attempts": len(interrupted), "provider_config_errors": len(config_errors)},
         "provenance": {"base_run_id": selected.get("base_run_id"), "repair_run_id": selected.get("repair_run_id"), "excluded_task_ids": sorted(excluded)},
     }
 
@@ -303,22 +362,22 @@ def render_report(summary: Mapping[str, Any], selection: Mapping[str, Any]) -> s
     lines = ["# P3a Teacher Profile", "", "本报告由本地 profiling SQLite/JSON artifacts 自动生成；不调用 teacher API，不把旧 contaminated records 当作 canonical 数据。", "", "> P3a 的 3/2 次数是 profiling operational limits，不是 P3b formal collection cap；diversity threshold、reserve policy、并发数均未冻结。", "", "## 1. Data provenance", "", f"- Selection version: `{selection['selection_version']}`", f"- Protocol: `{json.dumps(selection['protocol'], ensure_ascii=False)}`", "- Single: clean 24-task completed run.", "- Single&Pers: base 24-task run excluding `934909004241`, `895516447505`, overlaid with the completed 2-task repair run.", f"- Non-canonical repair runs retained for audit: `{json.dumps(selection['single_persona'].get('excluded_repair_runs', []), ensure_ascii=False)}`", ""]
     for scenario, title in (("single", "Single"), ("single_persona", "Single & Personalization")):
         item, fs, sd, div = summary[scenario], summary[scenario]["first_success"], summary[scenario]["second_demo"], summary[scenario]["diversity"]
-        lines += [f"## {title}", "", f"- Tasks: {item['tasks']}; genuine attempts: {item['records']['genuine']}; infrastructure interruptions excluded: {item['records']['infrastructure_interrupted']}; provider/config errors excluded: {item['records']['provider_config_error']}", f"- First-attempt success (Wilson 95% CI): {_rate(fs['first_attempt'])}", f"- Success within 2 / 3 attempts: {_rate(fs['within_2'])} / {_rate(fs['within_3'])}", f"- Eventual first-success: {_rate(fs['eventual'])}; profile_unsolved: {fs['profile_unsolved']}", f"- First-success attempts: {fs['genuine_attempts']}; attempts/success: {_fmt(fs['attempts_per_success'])}; distribution: `{json.dumps(fs['attempt_distribution'], sort_keys=True)}`", f"- Second-demo: {sd['tasks_entering']} tasks entered, {sd['attempts']} attempts, {sd['successes']} successes; at-least-one-success: {_rate(sd['at_least_one_success'])}; success/attempt: {_rate(sd['success_per_attempt'])}", f"- Exact duplicate pairs: {div['exact_duplicate_pairs']}; first-vs-second duplicate pairs: {div['first_vs_second_exact_duplicate_pairs']}; provisional near-duplicate pairs: {div['provisional_near_duplicate_pairs']} (diagnostic only)", f"- Action length mean/p50/p90/max: {_fmt(div['action_length']['mean'])}/{_fmt(div['action_length']['p50'])}/{_fmt(div['action_length']['p90'])}/{_fmt(div['action_length']['max'])}", f"- Failure modes: `{json.dumps(item['failures']['termination'], ensure_ascii=False, sort_keys=True)}`", ""]
+        lines += [f"## {title}", "", f"- Tasks: {item['tasks']}; genuine attempts: {item['records']['genuine']}; infrastructure interruptions excluded: {item['records']['infrastructure_interrupted']}; provider/config errors excluded: {item['records']['provider_config_error']}", f"- First-attempt success (Wilson 95% CI): {_rate(fs['first_attempt'])}", f"- Success within 2 / 3 attempts: {_rate(fs['within_2'])} / {_rate(fs['within_3'])}", f"- Eventual first-success: {_rate(fs['eventual'])}; profile_unsolved: {fs['profile_unsolved']}", f"- Solved-task attempts-to-success mean: {_fmt(fs['solved_tasks_attempts_to_success']['mean'])}; distribution: `{json.dumps(fs['solved_tasks_attempts_to_success']['distribution'], sort_keys=True)}`", f"- First-phase attempt burden / acquired success: {_fmt(fs['first_phase_attempt_burden_per_acquired_success'])}", f"- Second-demo: {sd['tasks_entering']} tasks entered, {sd['attempts']} attempts, {sd['successes']} successes; at-least-one-success: {_rate(sd['at_least_one_success'])}; success/attempt: {_rate(sd['success_per_attempt'])}", f"- Exact duplicates: all {div['all_exact_duplicate_count']}/{div['all_pair_count']} ({_fmt(div['all_exact_duplicate_rate'])}); first-second {div['first_second_exact_duplicate_count']}/{div['first_second_pair_count']} ({_fmt(div['first_second_exact_duplicate_rate'])}); second-second {div['second_second_exact_duplicate_count']}/{div['second_second_pair_count']} ({_fmt(div['second_second_exact_duplicate_rate'])})", f"- Provisional near-duplicates: {div['provisional_near_duplicate_count']}/{div['provisional_near_duplicate_denominator']} ({_fmt(div['provisional_near_duplicate_rate'])}); diagnostic only, not a formal threshold", f"- Action length mean/p50/p90/max: {_fmt(div['action_length']['mean'])}/{_fmt(div['action_length']['p50'])}/{_fmt(div['action_length']['p90'])}/{_fmt(div['action_length']['max'])}", f"- Failure modes: `{json.dumps(item['failures'], ensure_ascii=False, sort_keys=True)}`", ""]
         for group in ("successful", "genuine_failed", "infrastructure_interrupted"):
             t, tok = item["timing"][group], item["tokens"][group]
-            lines.append(f"- {group}: wall p50/p90/max={_seconds(t['total_wall_s']['p50'])}/{_seconds(t['total_wall_s']['p90'])}/{_seconds(t['total_wall_s']['max'])}; API p50/p90/max={_seconds(t['api_latency_s']['p50'])}/{_seconds(t['api_latency_s']['p90'])}/{_seconds(t['api_latency_s']['max'])}; env-step p50/p90/max={_seconds(t['environment_steps_latency_s']['p50'])}/{_seconds(t['environment_steps_latency_s']['p90'])}/{_seconds(t['environment_steps_latency_s']['max'])}; API wall proportion={_fmt(t['api_wall_proportion'])}; tokens mean input/output={_fmt(tok['input']['mean'],0)}/{_fmt(tok['output']['mean'],0)}")
-        lines += [f"- Behavioral feature equal-pair counts (action/search/clicked-product/options/final-purchase): `{json.dumps(div['behavioral_feature_equal_pair_counts'], ensure_ascii=False, sort_keys=True)}`", f"- Infrastructure: retries={item['infrastructure']['retry_total']}; HTTP statuses={json.dumps(item['infrastructure']['http_status_counts'], sort_keys=True)}", f"- Hard tasks: `{json.dumps(item['failures']['hard_tasks'], ensure_ascii=False)}`", ""]
+            lines.append(f"- {group}: trajectory-attempt-wall p50/p90/max={_seconds(t['trajectory_attempt_wall_time']['p50'])}/{_seconds(t['trajectory_attempt_wall_time']['p90'])}/{_seconds(t['trajectory_attempt_wall_time']['max'])}; API-call latency p50/p90/max={_seconds(t['api_call_latency']['p50'])}/{_seconds(t['api_call_latency']['p90'])}/{_seconds(t['api_call_latency']['max'])}; API-total/attempt p50/p90/max={_seconds(t['api_total_time_per_attempt']['p50'])}/{_seconds(t['api_total_time_per_attempt']['p90'])}/{_seconds(t['api_total_time_per_attempt']['max'])}; env-step p50/p90/max={_seconds(t['environment_step_latency']['p50'])}/{_seconds(t['environment_step_latency']['p90'])}/{_seconds(t['environment_step_latency']['max'])}; API wall proportion={_fmt(t['api_wall_proportion'])}; tokens mean input/output={_fmt(tok['input']['mean'],0)}/{_fmt(tok['output']['mean'],0)}")
+        lines += [f"- Behavioral feature equal-pair counts (action/search/clicked-product/options/final-purchase): `{json.dumps(div['behavioral_feature_equal_pair_counts'], ensure_ascii=False, sort_keys=True)}`", f"- Infrastructure: retries={item['infrastructure']['retry_total']}; retry events={item['infrastructure']['retry_event_count']}; telemetry complete={item['infrastructure']['retry_event_telemetry_complete']}; HTTP statuses={json.dumps(item['infrastructure']['http_status_counts'], sort_keys=True)}", f"- Hard tasks: `{json.dumps(item['failures']['hard_tasks'], ensure_ascii=False)}`", ""]
     lines += ["## Formal collection implications", "", "这些是 P3b 的数据输入，不是已冻结决策：API latency dominates serial wall time；hard-task retries can be disproportionately costly；24-task estimates have wide uncertainty；Persona project pool is 3323 rather than paper 3383。Formal caps, diversity threshold, reserve replacement and concurrency remain open for P3b。", "", "串行 rough projection（假设行为和延迟稳定）：", ""]
     for scenario, title in (("single", "Single"), ("single_persona", "Single&Pers")):
         p = summary[scenario]["formal_collection_projection"]
-        lines.append(f"- {title}: 3000-task initial unique-success estimate={_fmt(p['rough_initial_unique_successes_for_3000_tasks'])} (Wilson scaled range {_fmt(p['rough_initial_unique_successes_wilson_low_high'][0])}–{_fmt(p['rough_initial_unique_successes_wilson_low_high'][1])}); 6000 successes≈{_fmt(p['serial_6000_successes_hours'])}h; 12000 total≈{_fmt(p['serial_12000_successes_hours'])}h。")
+        lines.append(f"- {title}: 3000-task initial unique-success estimate={_fmt(p['rough_initial_unique_successes_for_3000_tasks'])} (Wilson scaled range {_fmt(p['rough_initial_unique_successes_wilson_low_high'][0])}–{_fmt(p['rough_initial_unique_successes_wilson_low_high'][1])}); success-only lower-bound 6000≈{_fmt(p['success_only_lower_bound_6000_hours'])}h; observed P3a cost-aware 6000≈{_fmt(p['observed_p3a_cost_aware_6000_hours'])}h。")
     lines += ["", "## Excluded history", "", "旧 implementation/config/resume 污染记录保留在本地 audit artifacts 中，不进入 canonical summary；不应作为 teacher failure 或 success rate denominator。"]
     return "\n".join(lines) + "\n"
 
 
 def build_outputs(data_root: Path, summary_path: Path, report_path: Path, selection_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     selection = build_selection(data_root)
-    summary = {"summary_version": "p3a-summary-v2", "created_at": datetime.now(timezone.utc).isoformat(), "selection_hash": _hash_json(selection), "selection": selection, "single": collect_canonical(data_root, selection, "single"), "single_persona": collect_canonical(data_root, selection, "single_persona"), "formal_policy_status": "not_frozen_p3b_pending"}
+    summary = {"summary_version": "p3a-summary-v3-metric-cleanup", "created_at": datetime.now(timezone.utc).isoformat(), "selection_hash": _hash_json(selection), "selection": selection, "single": collect_canonical(data_root, selection, "single"), "single_persona": collect_canonical(data_root, selection, "single_persona"), "formal_policy_status": "not_frozen_p3b_pending"}
     selection_path.parent.mkdir(parents=True, exist_ok=True); summary_path.parent.mkdir(parents=True, exist_ok=True); report_path.parent.mkdir(parents=True, exist_ok=True)
     selection_path.write_text(json.dumps(selection, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

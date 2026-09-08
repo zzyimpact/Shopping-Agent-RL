@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import signal
 import sqlite3
+import threading
 from typing import Any, Mapping
 import uuid
 from rollout.progress import ProgressLogger
@@ -109,7 +110,12 @@ class TeacherLedger:
                 raise FileNotFoundError(f"resume run 不存在: {root}")
             atomic_json(self.paths.manifest, desired)
             self.manifest = desired
-        self.db = sqlite3.connect(self.paths.database)
+        # A future bounded worker scheduler may share one ledger instance for
+        # short transactions.  SQLite still serializes writes; this RLock
+        # prevents interleaved cursor operations and makes close/resume
+        # deterministic.  Callers should join workers before closing.
+        self._lock = threading.RLock()
+        self.db = sqlite3.connect(self.paths.database, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(
@@ -131,167 +137,178 @@ class TeacherLedger:
         self.closed = False
 
     def start_attempt(self, task_id: str, *, teacher_attempt: int = 1) -> str:
-        attempt_id = uuid.uuid4().hex
-        path = self.paths.attempts / f"{attempt_id}.json"
-        record = {
-            "attempt_id": attempt_id, "task_id": task_id,
-            "scenario": self.manifest["scenario"], "status": "in_progress",
-            "teacher_attempt": teacher_attempt, "started_at": utc_now(), "events": [],
-        }
-        atomic_json(path, record)
-        with self.db:
-            self.db.execute(
-                "INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (attempt_id, task_id, self.manifest["scenario"], "in_progress",
-                 str(path.relative_to(self.paths.root)), record["started_at"], None, teacher_attempt),
-            )
-        return attempt_id
+        with self._lock:
+            attempt_id = uuid.uuid4().hex
+            path = self.paths.attempts / f"{attempt_id}.json"
+            record = {
+                "attempt_id": attempt_id, "task_id": task_id,
+                "scenario": self.manifest["scenario"], "status": "in_progress",
+                "teacher_attempt": teacher_attempt, "started_at": utc_now(), "events": [],
+            }
+            atomic_json(path, record)
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (attempt_id, task_id, self.manifest["scenario"], "in_progress",
+                     str(path.relative_to(self.paths.root)), record["started_at"], None, teacher_attempt),
+                )
+            return attempt_id
 
     def save_attempt(self, attempt_id: str, record: Mapping[str, Any], *, status: str) -> Path:
-        row = self.db.execute(
-            "SELECT task_id, started_at, artifact_path, teacher_attempt FROM attempts WHERE attempt_id=?",
-            (attempt_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(attempt_id)
-        task_id, started_at, relative_path, teacher_attempt = row
-        path = self.paths.root / relative_path
-        complete = dict(record)
-        complete.update({
-            "attempt_id": attempt_id, "task_id": task_id,
-            "scenario": self.manifest["scenario"], "status": status,
-            "teacher_attempt": teacher_attempt, "started_at": started_at,
-            "finished_at": utc_now(),
-        })
-        atomic_json(path, complete)
-        with self.db:
-            self.db.execute(
-                "UPDATE attempts SET status=?, finished_at=? WHERE attempt_id=?",
-                (status, complete["finished_at"], attempt_id),
-            )
-        return path
+        with self._lock:
+            row = self.db.execute(
+                "SELECT task_id, started_at, artifact_path, teacher_attempt FROM attempts WHERE attempt_id=?",
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(attempt_id)
+            task_id, started_at, relative_path, teacher_attempt = row
+            path = self.paths.root / relative_path
+            complete = dict(record)
+            complete.update({
+                "attempt_id": attempt_id, "task_id": task_id,
+                "scenario": self.manifest["scenario"], "status": status,
+                "teacher_attempt": teacher_attempt, "started_at": started_at,
+                "finished_at": utc_now(),
+            })
+            atomic_json(path, complete)
+            with self.db:
+                self.db.execute(
+                    "UPDATE attempts SET status=?, finished_at=? WHERE attempt_id=?",
+                    (status, complete["finished_at"], attempt_id),
+                )
+            return path
 
     def save_progress(self, attempt_id: str, record: Mapping[str, Any]) -> Path:
         """Durably update an in-progress attempt without marking it finished."""
-        row = self.db.execute(
-            "SELECT task_id, started_at, artifact_path, teacher_attempt FROM attempts WHERE attempt_id=?",
-            (attempt_id,),
-        ).fetchone()
-        if row is None:
-            raise KeyError(attempt_id)
-        task_id, started_at, relative_path, teacher_attempt = row
-        complete = dict(record)
-        complete.update({
-            "attempt_id": attempt_id, "task_id": task_id,
-            "scenario": self.manifest["scenario"], "status": "in_progress",
-            "teacher_attempt": teacher_attempt, "started_at": started_at,
-        })
-        atomic_json(self.paths.root / relative_path, complete)
-        with self.db:
-            self.db.execute("UPDATE attempts SET status='in_progress' WHERE attempt_id=?", (attempt_id,))
-        return self.paths.root / relative_path
+        with self._lock:
+            row = self.db.execute(
+                "SELECT task_id, started_at, artifact_path, teacher_attempt FROM attempts WHERE attempt_id=?",
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(attempt_id)
+            task_id, started_at, relative_path, teacher_attempt = row
+            complete = dict(record)
+            complete.update({
+                "attempt_id": attempt_id, "task_id": task_id,
+                "scenario": self.manifest["scenario"], "status": "in_progress",
+                "teacher_attempt": teacher_attempt, "started_at": started_at,
+            })
+            atomic_json(self.paths.root / relative_path, complete)
+            with self.db:
+                self.db.execute("UPDATE attempts SET status='in_progress' WHERE attempt_id=?", (attempt_id,))
+            return self.paths.root / relative_path
 
     def accept(self, attempt_id: str, trajectory: Mapping[str, Any]) -> Path:
         """先发布 accepted JSON，随后在一个 SQLite transaction 中标记。"""
-        row = self.db.execute(
-            "SELECT task_id FROM attempts WHERE attempt_id=?", (attempt_id,)
-        ).fetchone()
-        if row is None:
-            raise KeyError(attempt_id)
-        accepted_id = uuid.uuid4().hex
-        path = self.paths.accepted / f"{accepted_id}.json"
-        payload = dict(trajectory)
-        payload.update({
-            "accepted_id": accepted_id, "attempt_id": attempt_id,
-            "task_id": row[0], "scenario": self.manifest["scenario"],
-            "accepted_at": utc_now(),
-        })
-        atomic_json(path, payload)
-        with self.db:
-            self.db.execute(
-                "INSERT INTO accepted VALUES (?, ?, ?, ?, ?)",
-                (accepted_id, attempt_id, row[0], str(path.relative_to(self.paths.root)), payload["accepted_at"]),
-            )
-            self.db.execute(
-                "UPDATE attempts SET status='accepted', finished_at=? WHERE attempt_id=?",
-                (payload["accepted_at"], attempt_id),
-            )
-        return path
+        with self._lock:
+            row = self.db.execute(
+                "SELECT task_id FROM attempts WHERE attempt_id=?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(attempt_id)
+            accepted_id = uuid.uuid4().hex
+            path = self.paths.accepted / f"{accepted_id}.json"
+            payload = dict(trajectory)
+            payload.update({
+                "accepted_id": accepted_id, "attempt_id": attempt_id,
+                "task_id": row[0], "scenario": self.manifest["scenario"],
+                "accepted_at": utc_now(),
+            })
+            atomic_json(path, payload)
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO accepted VALUES (?, ?, ?, ?, ?)",
+                    (accepted_id, attempt_id, row[0], str(path.relative_to(self.paths.root)), payload["accepted_at"]),
+                )
+                self.db.execute(
+                    "UPDATE attempts SET status='accepted', finished_at=? WHERE attempt_id=?",
+                    (payload["accepted_at"], attempt_id),
+                )
+            return path
 
     def save_trajectory(self, attempt_id: str, trajectory: Mapping[str, Any], *, status: str = "success") -> Path:
         """Persist a profiling trajectory without giving it formal ``accepted`` status."""
         if not self.profile:
             raise RuntimeError("save_trajectory 仅用于 profiling ledger")
-        row = self.db.execute(
-            "SELECT task_id FROM attempts WHERE attempt_id=?", (attempt_id,)
-        ).fetchone()
-        if row is None:
-            raise KeyError(attempt_id)
-        path = self.paths.trajectories / f"{attempt_id}.json"
-        payload = dict(trajectory)
-        payload.update({
-            "attempt_id": attempt_id, "task_id": row[0],
-            "scenario": self.manifest["scenario"],
-            "profiling_status": status, "saved_at": utc_now(),
-        })
-        if path.exists():
-            raise FileExistsError(f"拒绝覆盖已存在 profiling trajectory: {path}")
-        atomic_json(path, payload)
-        with self.db:
-            self.db.execute(
-                "UPDATE attempts SET status=?, artifact_path=?, finished_at=? WHERE attempt_id=?",
-                (status, str(path.relative_to(self.paths.root)), payload["saved_at"], attempt_id),
-            )
-        return path
+        with self._lock:
+            row = self.db.execute(
+                "SELECT task_id FROM attempts WHERE attempt_id=?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(attempt_id)
+            path = self.paths.trajectories / f"{attempt_id}.json"
+            payload = dict(trajectory)
+            payload.update({
+                "attempt_id": attempt_id, "task_id": row[0],
+                "scenario": self.manifest["scenario"],
+                "profiling_status": status, "saved_at": utc_now(),
+            })
+            if path.exists():
+                raise FileExistsError(f"拒绝覆盖已存在 profiling trajectory: {path}")
+            atomic_json(path, payload)
+            with self.db:
+                self.db.execute(
+                    "UPDATE attempts SET status=?, artifact_path=?, finished_at=? WHERE attempt_id=?",
+                    (status, str(path.relative_to(self.paths.root)), payload["saved_at"], attempt_id),
+                )
+            return path
 
     def completed_task_ids(self) -> set[str]:
-        rows = self.db.execute(
-            "SELECT DISTINCT task_id FROM attempts WHERE status IN "
-            "('success','profile_unsolved','teacher_failure','malformed_action','invalid_action','environment_failure','max_steps')"
-        ).fetchall()
-        return {str(row[0]) for row in rows}
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT DISTINCT task_id FROM attempts WHERE status IN "
+                "('success','profile_unsolved','teacher_failure','malformed_action','invalid_action','environment_failure','max_steps')"
+            ).fetchall()
+            return {str(row[0]) for row in rows}
 
     def mark_profile_unsolved(self, task_id: str) -> None:
         """Mark the last completed teacher attempt as the profiling terminal outcome."""
-        row = self.db.execute(
-            "SELECT attempt_id, artifact_path FROM attempts WHERE task_id=? AND status != 'infrastructure_interrupted' "
-            "ORDER BY rowid DESC LIMIT 1", (task_id,)
-        ).fetchone()
-        if row:
-            attempt_id, relative_path = row
-            # Keep the JSON audit artifact and SQLite ledger in sync.  The
-            # summarizer reads artifacts, while resume reads SQLite; updating
-            # only one would silently lose the unsolved count in reports.
-            path = self.paths.root / relative_path
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                record = {"task_id": task_id, "termination_reason": "profile_unsolved", "success": False}
-            self.save_attempt(attempt_id, {**record, "termination_reason": "profile_unsolved", "success": False},
-                              status="profile_unsolved")
+        with self._lock:
+            row = self.db.execute(
+                "SELECT attempt_id, artifact_path FROM attempts WHERE task_id=? AND status != 'infrastructure_interrupted' "
+                "ORDER BY rowid DESC LIMIT 1", (task_id,)
+            ).fetchone()
+            if row:
+                attempt_id, relative_path = row
+                # Keep the JSON audit artifact and SQLite ledger in sync.  The
+                # summarizer reads artifacts, while resume reads SQLite; updating
+                # only one would silently lose the unsolved count in reports.
+                path = self.paths.root / relative_path
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    record = {"task_id": task_id, "termination_reason": "profile_unsolved", "success": False}
+                self.save_attempt(attempt_id, {**record, "termination_reason": "profile_unsolved", "success": False},
+                                  status="profile_unsolved")
 
     def mark_infrastructure_interrupted(self, attempt_id: str, record: Mapping[str, Any]) -> Path:
         return self.save_attempt(attempt_id, record, status="infrastructure_interrupted")
 
     def accepted_count(self) -> int:
-        return int(self.db.execute("SELECT COUNT(*) FROM accepted").fetchone()[0])
+        with self._lock:
+            return int(self.db.execute("SELECT COUNT(*) FROM accepted").fetchone()[0])
 
     def set_state(self, key: str, value: str) -> None:
-        with self.db:
-            self.db.execute(
-                "INSERT INTO run_state(key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value)
-            )
+        with self._lock:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO run_state(key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value)
+                )
 
     def get_state(self, key: str) -> str | None:
-        row = self.db.execute("SELECT value FROM run_state WHERE key=?", (key,)).fetchone()
-        return str(row[0]) if row else None
+        with self._lock:
+            row = self.db.execute("SELECT value FROM run_state WHERE key=?", (key,)).fetchone()
+            return str(row[0]) if row else None
 
     def close(self) -> None:
-        if not self.closed:
-            self.db.commit()
-            self.db.close()
-            self.closed = True
+        with self._lock:
+            if not self.closed:
+                self.db.commit()
+                self.db.close()
+                self.closed = True
 
     def __enter__(self) -> "TeacherLedger":
         return self

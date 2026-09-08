@@ -7,7 +7,7 @@ REMOTE_HOST="${TEACHER_ENV_REMOTE_HOST:-rtx-pro-6000-3}"
 REMOTE_PROJECT="${TEACHER_ENV_REMOTE_PROJECT:-/root/shopping-agent-rl}"
 REMOTE_PORT="${TEACHER_ENV_REMOTE_PORT:-5100}"
 LOCAL_PORT="${TEACHER_ENV_LOCAL_PORT:-5500}"
-EXPECTED_ENVIRONMENT_VERSION="task-scoped-v2"
+EXPECTED_ENVIRONMENT_VERSION="task-scoped-v3-multisession"
 EXPECTED_POLICY_OBSERVATION_VERSION="single-eval-policy-v1"
 EXPECTED_PROFILER_PROTOCOL_VERSION="p3a-visible-action-v2"
 STATE_DIR="${PROJECT_ROOT}/.cache/teacher_env"
@@ -150,12 +150,22 @@ if [[ -f "${TUNNEL_PID_FILE}" ]]; then
   fi
 fi
 if [[ ! -f "${TUNNEL_PID_FILE}" ]]; then
-  # nohup 使 tunnel 脱离本次 shell；PID 只记录本脚本启动的 ssh，不使用 broad kill。
-  nohup ssh -N -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
+  # ssh 自身 daemonize，避免父 terminal/shell 退出时转发被回收。PID 只
+  # 记录精确匹配这条 forward 的 ssh，不使用 broad kill。
+  ssh -f -N -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
     -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes \
     -L "127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}" "${REMOTE_HOST}" \
-    >"${TUNNEL_LOG}" 2>&1 </dev/null &
-  tunnel_pid=$!
+    >"${TUNNEL_LOG}" 2>&1 </dev/null
+  tunnel_pid=""
+  for _ in $(seq 1 10); do
+    tunnel_pid="$(ps -axo pid=,command= | awk -v needle="-L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}" '$0 ~ needle {print $1; exit}')"
+    [[ -n "${tunnel_pid}" ]] && break
+    sleep 0.2
+  done
+  if [[ -z "${tunnel_pid}" ]]; then
+    echo "SSH tunnel started but exact PID could not be resolved" >&2
+    exit 1
+  fi
   echo "${tunnel_pid}" > "${TUNNEL_PID_FILE}"
   TUNNEL_CREATED=1
 fi

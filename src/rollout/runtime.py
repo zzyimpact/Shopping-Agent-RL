@@ -31,7 +31,8 @@ def generate_or_interrupt(
             raise
         ledger.mark_infrastructure_interrupted(
             attempt_id,
-            {**partial_record, "failure_class": exc.kind, "retries": exc.retries},
+            {**partial_record, "failure_class": exc.kind, "retries": exc.retries,
+             "retry_events": list(getattr(exc, "retry_events", ()))},
         )
         ledger.set_state("status", "infrastructure_interrupted")
         ledger.close()

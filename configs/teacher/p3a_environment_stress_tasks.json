@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "purpose": "p3a_environment_isolation_stress",
+    "count": 10,
+    "source": "canonical successful P3a action paths; non-paid scripted replay only"
+  },
+  "tasks": [
+    {"scenario": "single", "task_id": "717232398263", "official_split": "train", "actions": ["search[改进款 有线游戏手柄 PC PS4 使命召唤 战神 包邮 带收纳袋 180元以内]", "click[717232398263]", "click[【包邮】c1 lite手柄+收纳包]", "click[buy now]"]},
+    {"scenario": "single", "task_id": "941007510366", "official_split": "train", "actions": ["search[汽车中控台四门LED灯带 冰蓝色 USB免接线 30元]", "click[941007510366]", "click[冰蓝一拖五套装【中控台+4个车门】usb接口]", "click[buy now]"]},
+    {"scenario": "single", "task_id": "924162520510", "official_split": "train", "actions": ["search[日本Hapins 蓝色防晒衣 UPF50+ 均码 100元左右]", "click[924162520510]", "click[均码]", "click[蟹肉蓝]", "click[buy now]"]},
+    {"scenario": "single", "task_id": "802546101141", "official_split": "train", "actions": ["search[小众高端仿真秋海棠叶 黑色 单支 摄影道具 插花 15元]", "click[802546101141]", "click[黑色]", "click[buy now]"]},
+    {"scenario": "single", "task_id": "899808710001", "official_split": "train", "actions": ["search[盆栽粉色番茄种子 香甜爆汁 100粒 配肥料套装]", "click[899808710001]", "click[粉果西红柿100粒100粒 | 1包+肥【常见的西红柿】]", "click[buy now]"]},
+    {"scenario": "single_persona", "task_id": "631405227503", "official_split": "train", "actions": ["search[绿色瓶 马奶酒 单瓶 25元 30元]", "click[631405227503]", "click[3度绿瓶【1瓶】]", "click[buy now]"]},
+    {"scenario": "single_persona", "task_id": "652382546234", "official_split": "train", "actions": ["search[大功率功放板 60元 DIY]", "click[652382546234]", "click[200wa43大管交流双22-28v环牛供电]", "click[buy now]"]},
+    {"scenario": "single_persona", "task_id": "687793449744", "official_split": "train", "actions": ["search[银河灰色调 唇蜜]", "click[687793449744]", "click[004#银河灰]", "click[buy now]"]},
+    {"scenario": "single_persona", "task_id": "727134375132", "official_split": "train", "actions": ["search[2023新款 天蓝色 手拿包 130元]", "click[727134375132]", "click[天兰]", "click[buy now]"]},
+    {"scenario": "single_persona", "task_id": "757758605212", "official_split": "train", "actions": ["search[童小喵 儿童隔离霜 舞台演出]", "click[757758605212]", "click[儿童隔离霜（26年1月到期）]", "click[buy now]"]}
+  ]
+}

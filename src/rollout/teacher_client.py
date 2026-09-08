@@ -26,12 +26,13 @@ class TeacherClientError(RuntimeError):
     """Teacher request failure with a stable infrastructure/config classification."""
 
     def __init__(self, message: str, *, kind: str, retryable: bool, status_code: int | None = None,
-                 retries: int = 0):
+                 retries: int = 0, retry_events: Sequence[Mapping[str, Any]] = ()):
         super().__init__(message)
         self.kind = kind
         self.retryable = retryable
         self.status_code = status_code
         self.retries = retries
+        self.retry_events = tuple(dict(item) for item in retry_events)
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class TeacherResponse:
     latency_s: float
     retries: int
     api_style: str
+    retry_events: tuple[dict[str, Any], ...] = ()
 
 
 def load_env_file(path: str) -> dict[str, str]:
@@ -176,7 +178,17 @@ class TeacherClient:
         """发送请求并返回 visible output；基础设施失败耗尽后抛出可分类异常。"""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         retries = 0
+        retry_events: list[dict[str, Any]] = []
         started = time.monotonic()
+
+        def record_retry(reason: str, ordinal: int, delay: float, status_code: int | None = None) -> None:
+            event = {"timestamp": datetime.now(timezone.utc).isoformat(), "reason": reason,
+                     "retry_ordinal": ordinal, "max_retries": self.max_retries, "backoff_s": delay}
+            if status_code is not None:
+                event["status_code"] = status_code
+            retry_events.append(event)
+            if self._on_retry:
+                self._on_retry(reason, ordinal, self.max_retries, delay)
         for attempt in range(self.max_retries + 1):
             try:
                 response = self._client.post(self.api_url, headers=headers, json=self._payload(messages))
@@ -184,23 +196,21 @@ class TeacherClient:
                 if attempt < self.max_retries:
                     retries += 1
                     delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
-                    if self._on_retry:
-                        self._on_retry("timeout", retries, self.max_retries, delay)
+                    record_retry("timeout", retries, delay)
                     self._sleep(delay)
                     continue
                 raise TeacherClientError(
-                    "teacher API timeout after retries", kind="infrastructure", retryable=True, retries=retries
+                    "teacher API timeout after retries", kind="infrastructure", retryable=True, retries=retries, retry_events=retry_events
                 ) from exc
             except httpx.RequestError as exc:
                 if attempt < self.max_retries:
                     retries += 1
                     delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
-                    if self._on_retry:
-                        self._on_retry("connection error", retries, self.max_retries, delay)
+                    record_retry("connection error", retries, delay)
                     self._sleep(delay)
                     continue
                 raise TeacherClientError(
-                    "teacher API unavailable after retries", kind="infrastructure", retryable=True, retries=retries
+                    "teacher API unavailable after retries", kind="infrastructure", retryable=True, retries=retries, retry_events=retry_events
                 ) from exc
 
             if response.status_code >= 400:
@@ -216,15 +226,14 @@ class TeacherClient:
                         except (TypeError, ValueError):
                             delay = BACKOFF_SECONDS[min(attempt, 2)]
                     delay += self._jitter()
-                    if self._on_retry:
-                        self._on_retry(f"HTTP {response.status_code}", retries, self.max_retries, delay)
+                    record_retry(f"HTTP {response.status_code}", retries, delay, response.status_code)
                     self._sleep(delay)
                     continue
                 kind = "infrastructure" if response.status_code in TRANSIENT_STATUS else "config"
                 label = "infrastructure" if kind == "infrastructure" else "request/config"
                 raise TeacherClientError(
                     f"teacher API {label} failure (HTTP {response.status_code})",
-                    kind=kind, retryable=kind == "infrastructure", status_code=response.status_code, retries=retries
+                    kind=kind, retryable=kind == "infrastructure", status_code=response.status_code, retries=retries, retry_events=retry_events
                 )
 
             try:
@@ -232,17 +241,16 @@ class TeacherClient:
             except (ValueError, json.JSONDecodeError) as exc:
                 protocol_error = TeacherClientError(
                     "teacher provider protocol error", kind="provider_protocol_error", retryable=True,
-                    retries=retries,
+                    retries=retries, retry_events=retry_events,
                 )
                 if attempt < self.max_retries:
                     retries += 1
                     delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
-                    if self._on_retry:
-                        self._on_retry("provider protocol", retries, self.max_retries, delay)
+                    record_retry("provider protocol", retries, delay)
                     self._sleep(delay)
                     continue
                 raise TeacherClientError(
-                    str(protocol_error), kind="provider_protocol_error", retryable=True, retries=retries
+                    str(protocol_error), kind="provider_protocol_error", retryable=True, retries=retries, retry_events=retry_events
                 ) from exc
             try:
                 text = _content_from_response(data, self.api_style)
@@ -250,12 +258,11 @@ class TeacherClient:
                 if exc.kind != "provider_protocol_error" or attempt >= self.max_retries:
                     raise TeacherClientError(
                         "teacher provider protocol error", kind="provider_protocol_error", retryable=True,
-                        retries=retries,
+                        retries=retries, retry_events=retry_events,
                     ) from exc
                 retries += 1
                 delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS) - 1)] + self._jitter()
-                if self._on_retry:
-                    self._on_retry("provider protocol", retries, self.max_retries, delay)
+                record_retry("provider protocol", retries, delay)
                 self._sleep(delay)
                 continue
             if not text.strip():
@@ -279,5 +286,6 @@ class TeacherClient:
                 latency_s=time.monotonic() - started,
                 retries=retries,
                 api_style=self.api_style,
+                retry_events=tuple(retry_events),
             )
         raise AssertionError("unreachable")

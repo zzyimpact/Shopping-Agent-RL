@@ -18,8 +18,8 @@ def test_health_reset_and_step_serialization():
         if request.url.path == "/health":
             return httpx.Response(200, request=request, json={"status": "ok"})
         if request.url.path == "/reset":
-            return httpx.Response(200, request=request, json={"session_id": "s1", "observation": "start"})
-        return httpx.Response(200, request=request, json={"done": False, "observation": "results"})
+            return httpx.Response(200, request=request, json={"session_id": "s1", "task_id": "834368861472", "scenario": "single", "environment_version": "task-scoped-v3-multisession", "observation": "start"})
+        return httpx.Response(200, request=request, json={"session_id": "s1", "task_id": "834368861472", "scenario": "single", "environment_version": "task-scoped-v3-multisession", "done": False, "observation": "results"})
 
     raw = httpx.Client(transport=httpx.MockTransport(handler))
     with TeacherEnvClient("http://localhost:5500", client=raw) as client:
@@ -47,3 +47,16 @@ def test_invalid_action_error_is_classified_without_provider_body():
         client.step("s", "garbage")
     assert caught.value.kind == "invalid_action"
     assert caught.value.status_code == 422
+
+
+def test_environment_version_mismatch_is_infrastructure():
+    def handler(request):
+        return httpx.Response(200, request=request, json={
+            "session_id": "s1", "task_id": "t1", "scenario": "single",
+            "environment_version": "task-scoped-v2", "observation": "start",
+        })
+
+    raw = httpx.Client(transport=httpx.MockTransport(handler))
+    with TeacherEnvClient(client=raw) as client, pytest.raises(TeacherEnvError) as caught:
+        client.reset("single", "t1")
+    assert caught.value.kind == "infrastructure"

@@ -98,6 +98,8 @@ def test_http_200_protocol_error_is_retryable_and_redacted(body):
         client.generate([{"role": "user", "content": "x"}])
     assert caught.value.kind == "provider_protocol_error"
     assert caught.value.retries == 2
+    assert len(caught.value.retry_events) == 2
+    assert all("status_code" not in event or event["status_code"] is None for event in caught.value.retry_events)
     assert body not in str(caught.value)
     assert len(calls) == 3
 

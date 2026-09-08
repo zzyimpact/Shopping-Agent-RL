@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "purpose": "p3a_concurrency_probe",
+    "scenario": "single",
+    "count": 10,
+    "source_task_file": "p3a_single_tasks.json",
+    "task_ids_sha256": "a9133fe9c34d9abbc1cca738759a22d984d1f69b9fb77bab8e47bcea730c79dc",
+    "selection": "known-short successful P3a TRAIN tasks; exactly one attempt per task; probe-only"
+  },
+  "tasks": [
+    {"task_id": "717232398263", "scenario": "single", "official_split": "train"},
+    {"task_id": "941007510366", "scenario": "single", "official_split": "train"},
+    {"task_id": "924162520510", "scenario": "single", "official_split": "train"},
+    {"task_id": "940895654982", "scenario": "single", "official_split": "train"},
+    {"task_id": "802546101141", "scenario": "single", "official_split": "train"},
+    {"task_id": "903808936653", "scenario": "single", "official_split": "train"},
+    {"task_id": "845250063748", "scenario": "single", "official_split": "train"},
+    {"task_id": "899808710001", "scenario": "single", "official_split": "train"},
+    {"task_id": "797953884670", "scenario": "single", "official_split": "train"},
+    {"task_id": "745584327849", "scenario": "single", "official_split": "train"}
+  ]
+}

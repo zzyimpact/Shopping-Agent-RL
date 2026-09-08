@@ -240,7 +240,7 @@ def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_
         "collection_config_hash": canonical_hash({"purpose": purpose, "scenario": scenario, "seed": metadata.get("seed"), "task_ids": [str(item["task_id"]) for item in task_data.get("tasks", [])], "limits": PROFILE_LIMITS}),
         "shopsim_source_fingerprint": env_health.get("source_fingerprint", "unknown"),
         "environment_fingerprint": env_health.get("source_fingerprint", "unknown"),
-        "environment_version": env_payload.get("environment_version", "task-scoped-v2"),
+        "environment_version": env_payload.get("environment_version", "task-scoped-v3-multisession"),
         "policy_observation_version": env_payload.get("policy_observation_version", POLICY_OBSERVATION_VERSION),
         "profiler_protocol_version": env_payload.get("profiler_protocol_version", PROFILER_PROTOCOL_VERSION),
         "reward_deviation_version": env_payload.get("reward_deviation_version", "query-match-false-v1"),
@@ -366,6 +366,7 @@ def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Te
                 "input_tokens": response.input_tokens, "output_tokens": response.output_tokens,
                 "request_id": response.request_id or "N/A", "model": response.model or "N/A",
                 "http_status": response.status_code,
+                "retry_events": list(response.retry_events),
             })
             record["infrastructure_retries"] += response.retries
             record["total_input_tokens"] += response.input_tokens or 0

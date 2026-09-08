@@ -1,0 +1,443 @@
+identity:
+  policy_version: p3b-v1
+  policy_status: frozen
+  policy_hash: b502cd79e2e95e63680126595bd701b3108909169c5fa40ed6572fca6797a59f
+  hash_algorithm: sha256-canonical-json-without-identity.policy_hash
+  seed: 1
+
+scope:
+  scenarios:
+    - single
+    - single_persona
+  separate_run_per_scenario: true
+  pass_order:
+    - A
+    - B
+    - C
+  cross_pass_speculation: false
+
+teacher:
+  model: gpt-5.6-sol
+  api_style: responses
+  reasoning_effort: high
+  request_semantics: p3a-compatible
+  full_visible_conversation_history: true
+  visible_response_protocol:
+    - "Thought: concise visible rationale"
+    - "Action: upstream textual action"
+  hidden_chain_of_thought: false
+  diversity_conditioned_prompting: false
+  explicitly_omitted_request_fields:
+    - temperature
+    - top_p
+  returned_model_validation:
+    mode: exact
+    expected: gpt-5.6-sol
+    mismatch_action: global_stop_preserve_state
+  p3a_transport_provenance: chat_completions
+  preformal_gate:
+    responses_adapter_tiny_compatibility_smoke_required: true
+    reason: formal transport differs from canonical P3a transport
+
+protocol:
+  environment_version: task-scoped-v3-multisession
+  policy_observation_version: single-eval-policy-v1
+  action_protocol_version: p3a-visible-action-v2
+  reward_deviation_version: query-match-false-v1
+  prompt_semantics:
+    single: exact_upstream_single
+    single_persona: instruction_simple_plus_upstream_persona_injection
+
+concurrency:
+  workers_default: 8
+  workers_configurable: true
+  workers_min: 1
+  workers_max_guard: 32
+  workers_immutable_per_run: true
+  deterministic_queue_creation: true
+  completion_order_deterministic: false
+  environment_operations: serialized
+  teacher_api_waits: concurrent
+  provider_wide_shared_429_throttle:
+    enabled: false
+    disposition: deferred_not_forgotten
+    reconsider_on: sustained_rate_limiting_at_8_workers
+
+task_sources:
+  stratum_fields:
+    - domain_zh
+    - category
+  single:
+    train_manifest: train_single.json
+    train_task_count: 21962
+    train_task_ids_sha256: 4e4847c31fc4aabaac21fb65a9fa8a7d9e90de372886eb71f915f142bf3c1e03
+    primary_manifest: sft_task_manifest_single.json
+    primary_task_count: 3000
+    primary_task_ids_sha256: 870c399fbb2034f58a0dc4b18b8563d4a8748a35d78a9e89de509db5ac2b969d
+    reserve_task_count: 18962
+  single_persona:
+    train_manifest: train_single_persona.json
+    train_task_count: 3323
+    train_task_ids_sha256: f39b49d7cb546a657d4c15808967d827dab483e313c1100dd991b669295eedb8
+    primary_manifest: sft_task_manifest_single_persona.json
+    primary_task_count: 3000
+    primary_task_ids_sha256: f8ca0e5d3982661d19343df337a9713da16211ac43a361074a2c5d9c35fb6521
+    reserve_task_count: 323
+
+targets:
+  primary_tasks_per_scenario: 3000
+  unique_successful_tasks_per_scenario:
+    target: 3000
+    hard: false
+  accepted_trajectories_per_scenario:
+    target: 6000
+    hard: true
+  accepted_trajectories_total: 12000
+  accepted_demos_per_task:
+    minimum: 1
+    target: 2
+    maximum: 3
+  bounded_capacity_exhausted_status: quota_unmet
+
+attempt_budgets:
+  first_success_genuine_attempts_max: 2
+  second_demo_attempts_max: 2
+  post_first_success_attempts_max: 3
+  infrastructure_consumes_genuine_attempt: false
+  unsuccessful_or_rejected_post_success_attempt_consumes_budget: true
+
+acceptance:
+  success:
+    reward_metric: Rsucc
+    required_value: 1
+    done_required: true
+    valid_terminal_purchase_required: true
+    reject_on_environment_fatal_error: true
+    reject_on_provider_or_infrastructure_interruption: true
+    reject_on_parser_corruption: true
+  record_reward_metrics:
+    - Rloose
+    - Rstrict
+    - Rsucc
+    - Rfinish
+    - Rcategory
+    - Rattribute
+    - Roption
+    - Rprice
+  evaluator_only_metadata:
+    storage_namespace: evaluator_only
+    policy_prompt_access: forbidden
+    sft_formatter_access: forbidden
+
+quality:
+  shortest_path_required: false
+  hard_reject:
+    - exact_behavioral_duplicate
+    - environment_or_parser_glitch
+    - malformed_or_invalid_action_with_untrusted_integrity
+    - evaluator_or_gold_leakage
+    - deterministic_no_progress_loop
+  no_progress_loop:
+    disposition: hard_reject
+    consecutive_identical_normalized_actions: 3
+    require_unchanged_policy_visible_observation: true
+    observation_semantics: pre_action
+    comparison: exact
+    thought_participates: false
+    p3a_audit:
+      successful_trajectories_audited: 113
+      trajectories_with_required_telemetry: 113
+      rule_hits: 0
+
+diversity:
+  exact_behavioral_duplicate:
+    disposition: hard_reject
+    definition: normalized_behavioral_action_trajectory_equality
+    consumes_teacher_attempt: true
+    counts_toward_accepted_target: false
+    thought_participates: false
+  provisional_near_duplicate:
+    disposition: diagnostic_only
+    counts_toward_accepted_target_if_other_checks_pass: true
+    formal_threshold_frozen: false
+  forbidden_methods:
+    - embedding_similarity
+    - llm_as_judge
+    - thought_text_similarity
+
+passes:
+  A:
+    name: coverage
+    input: frozen_primary_manifest
+    coverage_first: true
+    genuine_attempts_per_task_max: 2
+    primary_failure_status: primary_unsolved
+    reserve:
+      enabled: true
+      source: scenario_train_minus_frozen_primary
+      selection: deterministic_unused_same_stratum
+      seed: 1
+      replacement_genuine_attempts_max: 2
+      continue_until: coverage_slot_success_or_same_stratum_exhausted
+      cross_stratum_fallback: false
+      exhausted_status: reserve_exhausted
+    stop_when:
+      - unique_successful_tasks_reaches_3000
+      - all_coverage_slots_successful_or_same_stratum_reserve_exhausted
+  B:
+    name: natural_second_demo
+    eligible: pass_A_first_success_tasks
+    initial_independent_attempts: 1
+    recovery_attempts_max: 1
+    total_attempts_max: 2
+    fresh_reset: true
+    sees_prior_trajectory: false
+    recovery_triggers:
+      - failure
+      - exact_duplicate
+      - hygiene_reject
+  C:
+    name: quota_fill
+    accepted_target: 6000
+    eligible: first_success_tasks_only
+    opens_new_coverage_or_reserve_search: false
+    require_remaining_post_first_success_budget: true
+    accepted_demo_count_priority:
+      - 1
+      - 2
+    stratum_distribution:
+      source: frozen_primary_manifest_proportions
+      allocation: largest_remainder
+      fields:
+        - domain_zh
+        - category
+      seed: 1
+      deterministic_task_order: true
+      exhausted_stratum_status: stratum_shortfall
+      spillover_to_other_eligible_strata: allowed_and_recorded
+    stop_when:
+      - accepted_trajectories_reaches_6000
+      - no_eligible_capacity_remains
+
+infrastructure:
+  retryable_failure_classes:
+    - connection_error
+    - timeout
+    - HTTP_408
+    - HTTP_429
+    - HTTP_500
+    - HTTP_502
+    - HTTP_503
+    - HTTP_504
+    - provider_protocol_error
+  retries_after_initial_request_max: 3
+  retry_after_header_preferred: true
+  backoff_seconds:
+    - 2
+    - 5
+    - 10
+  exhausted_action: global_graceful_stop
+  global_stop_semantics:
+    stop_scheduling_new_work: true
+    no_new_api_requests: true
+    allow_inflight_requests_to_return_and_persist: true
+    persist_interrupted_attempts: true
+    release_environment_sessions_best_effort: true
+    flush_sqlite_json_and_log: true
+  resume:
+    interrupted_task_fresh_reset: true
+    interrupted_attempt_consumes_genuine_attempt: false
+  non_retryable_config_failures:
+    - HTTP_400
+    - HTTP_401
+    - HTTP_403
+    - HTTP_404
+    - HTTP_422
+    - returned_model_mismatch
+  non_retryable_action: global_stop_preserve_state
+  classify_as_teacher_failure: false
+
+storage:
+  run_root: data/teacher_raw/{scenario}/{run_id}
+  run_files:
+    - run_manifest.json
+    - state.sqlite
+    - accepted/
+    - attempts/
+  atomic_json: true
+  durable_sqlite_ledger: true
+  resume_required: true
+  ctrl_c_graceful_persistence: true
+  trajectory_artifact_contract:
+    required_fields:
+      - task_id
+      - scenario
+      - run_id
+      - pass
+      - attempt_id
+      - sanitized_teacher_model_config
+      - messages
+      - visible_teacher_responses
+      - actions
+      - policy_visible_observations
+      - terminal_purchase
+      - reward_metrics
+      - attempt_timing
+      - api_token_usage
+      - retry_events
+      - behavior_fingerprint
+      - exact_duplicate
+      - provisional_near_duplicate
+      - accepted
+      - rejection_reason
+    optional_fields:
+      - api_request_ids
+    provider_raw_response_body_forbidden: true
+    evaluator_metadata_namespace: evaluator_only
+
+logging_contract_for_p3c:
+  collector_log:
+    path: data/teacher_raw/collector.log
+    append_only: true
+    secrets_forbidden: true
+    line_context_fields:
+      - timestamp
+      - level_or_event
+      - scenario
+      - run_id
+      - worker
+      - pass
+      - task_id
+      - attempt
+      - step_if_relevant
+    required_events:
+      - run_start
+      - resume
+      - pass_start
+      - task_start
+      - attempt_start
+      - api_retry
+      - success
+      - failure
+      - accepted
+      - exact_duplicate_rejected
+      - reserve_selected
+      - reserve_exhausted
+      - quota_progress
+      - ctrl_c
+      - infrastructure_stop
+      - run_complete
+      - quota_unmet
+  inspector:
+    script: scripts/inspect_teacher_run.py
+    required_options:
+      - --latest
+      - --last
+    required_output:
+      - run_id
+      - status
+      - scenario
+      - workers
+      - current_pass
+      - unique_successes
+      - accepted_trajectories
+      - genuine_attempts
+      - reserve_used
+      - api_calls
+      - retries
+      - HTTP_429
+      - HTTP_5xx
+      - input_output_tokens
+      - elapsed
+      - last_success
+      - last_error
+      - last_update
+      - exact_resume_command
+      - recent_collector_log_lines
+  source_of_truth:
+    - attempt_json
+    - state_sqlite
+
+run_manifest_contract_for_p3c:
+  policy_reference:
+    - policy_version
+    - policy_hash
+  immutable_fields:
+    - scenario
+    - workers
+    - seed
+    - teacher_model
+    - api_style
+    - reasoning_effort
+    - sanitized_request_schema_config_hash
+    - prompt_hash
+    - protocol_versions
+    - queue_task_ordering_policy
+  secret_fields_forbidden:
+    - api_key
+    - api_url
+    - authorization
+  returned_model_validation_required: true
+
+evidence:
+  canonical_p3a:
+    summary_version: p3a-summary-v3-metric-cleanup
+    selection_hash: 0bb8f5271b8f7ebabdff220f4d509bbc19c832c4700e671bc0d2ba911a064281
+    single:
+      tasks: 24
+      eventual_first_success: 19
+      first_phase_genuine_attempts: 34
+      first_phase_attempt_burden_per_acquired_success: 1.7894736842105263
+      second_demo_successes: 38
+      second_demo_attempts: 38
+      first_second_exact_duplicates: 6
+      first_second_pairs: 38
+      successful_api_wall_proportion: 0.9788
+      genuine_failure_mean_wall_seconds: 200.38
+    single_persona:
+      tasks: 24
+      eventual_first_success: 20
+      first_phase_genuine_attempts: 35
+      first_phase_attempt_burden_per_acquired_success: 1.75
+      second_demo_successes: 36
+      second_demo_attempts: 40
+      first_second_exact_duplicates: 4
+      first_second_pairs: 36
+      successful_api_wall_proportion: 0.9794
+      genuine_failure_mean_wall_seconds: 53.04
+    historical_retry_event_telemetry_complete: false
+  concurrency_probes:
+    workers_2:
+      run_id: 20260908T053702Z-ad196839
+      tasks: 2
+      successes: 2
+      effective_parallel_speedup: 1.8490901903660886
+      retry_events: 0
+      session_mismatches: 0
+      environment_errors: 0
+    workers_8:
+      run_id: 20260908T061231Z-a9133fe9
+      tasks: 10
+      successes: 10
+      makespan_seconds: 203.9430837079999
+      trajectories_per_hour: 176.51983752262865
+      retry_events: 0
+      HTTP_429: 0
+      session_mismatches: 0
+      environment_errors: 0
+    workers_10:
+      run_id: 20260908T060305Z-a9133fe9
+      tasks: 10
+      successes: 9
+      terminal_unsuccessful: 1
+      makespan_seconds: 279.1842182920009
+      trajectories_per_hour: 116.05240510447693
+      retry_events: 15
+      HTTP_429: 15
+      session_mismatches: 0
+      environment_errors: 0
+
+deferred_not_forgotten:
+  - provider_wide_shared_429_throttle
+  - formal_near_duplicate_threshold
+  - complex_trajectory_quality_classifier

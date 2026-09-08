@@ -1,7 +1,8 @@
 # P3 Teacher Collection（P3-0 基础设施）
 
-**状态**：P3-0 与 canonical P3a 完成；当前文档同时记录 P3a summary metric correction
-和 concurrency probe infrastructure。本文不表示 P3b policy 或正式 collection 已冻结。
+**状态**：P3-0、canonical P3a、concurrency extension 与 P3b policy freeze 已完成；下一步是
+P3c formal collector implementation。正式冻结规则以 `P3B_COLLECTION_POLICY.md` 与
+`configs/teacher/formal_collection_p3b_v1.yaml` 为准。
 
 ## 1. 架构
 
@@ -64,9 +65,14 @@ trajectory 或评测结果。
 
 Remote provenance：ShopSimulator public snapshot 不包含 `shop_env/search_engine`；index 使用 pinned Princeton WebShop commit `64fa2a5c15c7daa698b9ac93f5bb5437b634c9bd` 的兼容 converter/indexing source。Catalog-Fine index build 命令和 source fingerprint 见 [P2_ENVIRONMENT_SETUP.md](P2_ENVIRONMENT_SETUP.md)。当前 remote spaCy 模型为 `core_web_sm 3.8.0`。
 
-## 5. Approved collection policy（本轮只记录，不执行）
+## 5. Frozen collection policy（P3b v1；本页只摘要）
 
-每个 scenario 的目标是 6,000 条 accepted successful trajectories，约覆盖 3,000 个 unique tasks；2 demos/task 是默认 target 而非 hard constraint，接受范围为每 task 1–3 条。优先级为 `Success > behavior quality > task coverage > diversity`，采用 coverage-first：Pass A 获取第一条 success，Pass B 尝试第二条自然不同 success，Pass C 在最多 3 demos/task 内做 quota redistribution。独立 stochastic sampling 后做基于行为的 post-hoc diversity filtering；不通过 prompt 强造绕路，简单 task 可标记 `diversity_saturated` 只保留一条。困难 task 使用 bounded retry；第一条始终失败时，从相同 stratum 使用 deterministic reserve replacement；第二条失败或重复时保留第一条并由其他 task 补 quota。具体 attempt cap 和 similarity threshold 留到 P3a profiling 后冻结。
+每个 scenario hard target 为 6,000 条 accepted successful trajectories；约 3,000 unique 是
+coverage target，接受范围为每 task 1–3 条、target 2。Default workers=8。Pass A first-success
+cap=2 并使用 seed=1 deterministic same `(domain_zh, category)` reserve；Pass B 最多 2 次；
+B+C post-first-success budget 合计 3 次；Pass C 做 proportional quota fill。Exact behavioral
+duplicate hard reject，provisional near duplicate diagnostic-only。完整 attempt、acceptance、
+infrastructure 与 logging contract 见 `P3B_COLLECTION_POLICY.md`。
 
 未来 diversity fingerprint 至少包含 normalized action sequence、normalized search queries、clicked product IDs、selected options 和 trajectory length；Thought 措辞差异不视为策略差异。Teacher 只使用 visible `Thought: 简短 action rationale` 与 `Action:` protocol，不获取或保存 hidden chain-of-thought。Prompt 优先复用 upstream Single/Persona system prompt 与完整 visible conversation history；Persona 额外注入 `user_persona`，不添加改变 policy distribution 的“生成 SFT 数据”指令。
 
@@ -88,8 +94,9 @@ failure 后，不再让 queued task 发起新外部请求；in-flight request �
 使用独立 `TeacherClient`/HTTP client；probe artifacts 写到
 `data/teacher_concurrency_probe/`，不进入 `teacher_profile`、SFT 或 canonical summary。
 
-这是 concurrency probe infrastructure，不是正式 collection scheduler。candidate `N=10`
-仅用于后续测量，formal worker count 仍由 P3b 决定。
+这是 concurrency probe infrastructure，不是正式 collection scheduler。2/8/10-worker probe
+支持 P3b 冻结 formal default `N=8`；实际 worker count 仍可配置，但必须写入 immutable run
+manifest。
 
 远端 non-paid isolation stress 已验证 10 个混合 Single/Persona session：slot/session 唯一，
 正常 search/product/option/Buy Now 路径互不串 task/goal，释放一个 session 不影响其余 session，
@@ -101,9 +108,9 @@ failure 后，不再让 queued task 发起新外部请求；in-flight request �
 ```text
 P3-0  API & collection infrastructure smoke       ← complete
 P3a   Teacher profiling（canonical single worker） ← complete
-P3a-C Concurrency extension/probe                 ← current infrastructure
-P3b   Collection policy freeze
-P3c   Formal collection
+P3a-C Concurrency extension/probe                 ← complete
+P3b   Collection policy freeze                    ← complete
+P3c   Formal collector implementation             ← next
 P3d   Dataset freeze
 ```
 

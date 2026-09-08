@@ -281,32 +281,33 @@ SQLite + atomic JSON durable storage、immutable run manifest/resume、graceful 
 remote task-scoped environment adapter、SSH up/down 脚本和 local/remote 分离 smoke。
 P3-0 不调用真实 teacher API、不批量采集 trajectory、不生成 SFT 数据。
 
-## 9.2 P3a Teacher profiling
+## 9.2 P3a Teacher profiling — COMPLETE
 
-P3-0 通过后再用单 worker 做小规模 profiling，测 teacher success rate、actions/trajectory、
-API token/cost、environment latency 和 attempts/success。此阶段才冻结 exact relay
-model identifier、generation 参数、attempt cap 与 diversity threshold。
+P3-0 通过后已用 single worker 完成 canonical profiling，并完成 multi-session concurrency
+extension 与 2/8/10-worker probe。Canonical statistics 见 `docs/P3A_TEACHER_PROFILE.md`。
 
-当前 P3a 仅使用每个 scenario 24 条、来自冻结 primary SFT TRAIN manifest 的 deterministic
+P3a 使用每个 scenario 24 条、来自冻结 primary SFT TRAIN manifest 的 deterministic
 profiling tasks（seed=1）。每 task 的 first-success 最多 3 次尝试，取得第一条 success 后
 再做最多 2 次独立 second-demo exploration；`max_action_steps=30`、单 worker。上述数字仅是
-profiling operational limits，**不是**正式 collection caps；formal attempt cap、reserve
-策略和 diversity threshold 留到 P3b 根据真实 profiling 结果冻结。P3a 输出物理隔离于
+profiling operational limits，**不是**正式 collection caps。P3a 输出物理隔离于
 `data/teacher_raw/`，不得直接进入 SFT。
 
-## 9.3 P3b Collection policy freeze
+## 9.3 P3b Collection policy freeze — COMPLETE
 
-依据 P3a 结果冻结 collection policy 的运行参数。原则已批准但本轮只记录：每 scenario
-目标 6,000 successful trajectories、约 3,000 unique tasks、每 task 接受 1–3 条（2 条是
-default target）；coverage-first Pass A/B/C、bounded retry、same-stratum reserve replacement、
-以及 post-hoc 行为多样性过滤。
+`p3b-v1` 已冻结：每 scenario hard target 6,000 accepted trajectories；约 3,000 unique 是
+coverage target；default workers=8；Pass A first-success cap=2、deterministic same-stratum
+reserve；Pass B 最多 2 次；B+C post-success budget=3；每 task accepted 1/2/3；exact
+behavioral duplicate hard reject、near duplicate diagnostic-only。Machine-readable source of
+truth 是 `configs/teacher/formal_collection_p3b_v1.yaml`，解释与证据见
+`docs/P3B_COLLECTION_POLICY.md`。
 
-## 9.4 P3c Formal collection
+## 9.4 P3c Formal Collector Implementation — NEXT
 
-冻结后正式 collection 必须支持 resume、skip completed、sharded output、retry、per-task
-attempt cap、near-duplicate detection、replacement task 和 collection statistics。所有
-attempt（包括失败/partial/infrastructure interruption）保留审计 artifact，只有 accepted
-successful trajectories 可进入后续 SFT。
+下一阶段实现 formal A/B/C scheduler、default 8-worker queue、deterministic reserve、
+acceptance/duplicate/budget accounting、durable resume/global stop、append-only
+`data/teacher_raw/collector.log`、`scripts/inspect_teacher_run.py --latest/--last N` 与 immutable
+policy version/hash。先跑 no-paid tests，再由用户触发 tiny Responses compatibility/formal
+smoke；不得在实现阶段直接开始 6,000 trajectory collection。
 
 ## 9.5 P3d Dataset freeze
 

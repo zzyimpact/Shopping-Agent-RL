@@ -646,52 +646,41 @@ Pass 2：
 
 优先 breadth，再增加 demonstration diversity。
 
-## 10.2 Success criterion `[PROJECT-DEFAULT / ADJUSTABLE]`
+## 10.2 Success criterion `[PROJECT-FIXED / P3B-V1]`
 
 论文只写 “successful trajectories”。
 
-v1 默认：
+P3b v1 冻结：
 
 ```text
 Rsucc == 1
 ```
 
-才进入 SFT dataset。
+并且 `done=True`、存在 valid terminal purchase、无 environment/provider/parser corruption，
+通过 hygiene 与 exact-duplicate filter 后才可 accepted。全部 8 reward metrics 进入 raw artifact，
+evaluator-only 字段不进入 policy prompt 或 SFT formatter。
 
-若官方代码存在更明确 successful semantics，优先与官方对齐并记录。
+## 10.3 Duplicate control `[PROJECT-FIXED / P3B-V1]`
 
-## 10.3 Duplicate control `[PROJECT-DEFAULT / ADJUSTABLE]`
+Exact normalized behavioral action trajectory equality 是 hard reject；Thought 文本不参与。
+Provisional near duplicate 仅做 diagnostic flag，不 hard reject。禁止 embedding similarity、
+LLM-as-judge 与 Thought-text similarity。
 
-同 task 第二条 trajectory：
+## 10.4 Difficult task / attempt cap `[PROJECT-FIXED / P3B-V1]`
 
-- 必须成功；
-- 不应与第一条完全/近乎完全重复。
-
-可使用轻量检查：
-
-- action-type sequence；
-- search query sequence；
-- clicked product sequence；
-- normalized action string；
-- text similarity。
-
-threshold 后续根据真实 teacher 轨迹确定。
-
-## 10.4 Difficult task / attempt cap `[PROJECT-DEFAULT / ADJUSTABLE]`
-
-需要：
+正式 collection 使用 bounded A/B/C policy：
 
 ```text
-max_teacher_attempts_per_task
+Pass A first-success genuine attempts/task = 2
+Pass B second-demo attempts/task = 2
+post-first-success attempts/task across B+C = 3
+accepted demos/task min/target/max = 1/2/3
 ```
 
-超过 cap 仍不足成功轨迹：
-
-- 标记 teacher-failure；
-- 从同一 sampling stratum 选 replacement task；
-- 保持最终 success trajectory 总量和大致 distribution。
-
-具体 cap 根据 teacher success-rate profiling 决定。
+Primary first-success 失败后，以 seed=1 从同 scenario TRAIN minus primary 中选择 unused
+same `(domain_zh, category)` reserve；不跨 stratum fallback。Infrastructure interruption 不消耗
+genuine attempt。完整规则、证据和 policy hash 见 `docs/P3B_COLLECTION_POLICY.md` 与
+`configs/teacher/formal_collection_p3b_v1.yaml`；任何规则变化必须创建新 policy version。
 
 ---
 
@@ -1509,11 +1498,9 @@ Project：当 `query` 不可用时显式固定 `query_match=False`，不从 titl
 
 # 31. 后续仍需单独冻结的参数
 
-Teacher：
-- exact model/version；
-- generation temperature/top-p；
-- max attempts/task；
-- duplicate threshold。
+Teacher collection policy 已在 P3b 冻结为 `p3b-v1`：`gpt-5.6-sol`、Responses API、high、
+不显式设置 temperature/top-p、default workers=8、Pass A/B/C attempt budget 与 exact-only
+duplicate hard reject。P3c 不得静默修改；详见 `docs/P3B_COLLECTION_POLICY.md`。
 
 LoRA：
 - rank；

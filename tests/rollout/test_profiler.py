@@ -184,3 +184,77 @@ def test_resume_selects_latest_incomplete_run(tmp_path):
     assert selected.status == "stopped"
     assert selected.touched_tasks == 0
     assert older_count == 1
+
+
+def test_repair_task_file_is_two_tasks_and_uses_separate_purpose(tmp_path, monkeypatch):
+    import json
+    import shutil
+    import rollout.profiler as profiler
+
+    source = Path(__file__).parents[2] / "configs" / "teacher" / "p3a_single_persona_tasks.json"
+    repair = Path(__file__).parents[2] / "configs" / "teacher" / "p3a_single_persona_repair_tasks.json"
+    task_dir = tmp_path / "configs"
+    task_dir.mkdir()
+    shutil.copy(source, task_dir / source.name)
+    task_file = task_dir / repair.name
+    shutil.copy(repair, task_file)
+    env_file = tmp_path / ".env.teacher"
+    env_file.write_text("\n".join([
+        "TEACHER_API_URL=http://local.invalid", "TEACHER_API_KEY=fixture",
+        "TEACHER_API_MODEL=model-a", "TEACHER_API_STYLE=responses",
+        "TEACHER_REASONING_EFFORT=high",
+    ]))
+
+    class RepairEnv(FakeEnv):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+        def reset(self, scenario, task_id):
+            result = super().reset(scenario, task_id)
+            result.payload["policy_context"]["user_persona"] = {"budget": "80"}
+            return result
+        def health(self):
+            return EnvResult({"status": "ok", "source_fingerprint": "source-fp"}, 0.001)
+        def close(self):
+            pass
+
+    class RepairClient(FakeClient):
+        def __init__(self, **kwargs):
+            self.text = "Thought: go\nAction: click[p1]"
+        def close(self):
+            pass
+
+    monkeypatch.setattr(profiler, "TeacherEnvClient", RepairEnv)
+    monkeypatch.setattr(profiler, "TeacherClient", RepairClient)
+    assert profiler.run_profile(
+        scenario="single_persona", env_endpoint="http://fake", task_file=task_file,
+        data_root=tmp_path / "data", env_file=env_file,
+    ) == 0
+    runs = list((tmp_path / "data" / "single_persona").glob("p3a-repair-*/"))
+    assert len(runs) == 1
+    manifest = json.loads((runs[0] / "run_manifest.json").read_text())
+    assert manifest["purpose"] == "p3a_repair"
+    assert manifest["selected_task_ids"] == ["934909004241", "895516447505"]
+    assert len(list((runs[0] / "trajectories").glob("*.json"))) == 6
+
+
+def test_repair_resume_uses_explicit_run_and_task_file(tmp_path):
+    import json
+    import sqlite3
+    from rollout.profiler import _find_resume_run
+
+    root = tmp_path / "data" / "single_persona" / "p3a-repair-existing"
+    root.mkdir(parents=True)
+    (root / "run_manifest.json").write_text(json.dumps({
+        "purpose": "p3a_repair", "scenario": "single_persona",
+        "selected_task_ids": ["934909004241", "895516447505"],
+        "created_at": "2026-09-08T00:00:00+00:00",
+    }))
+    db = sqlite3.connect(root / "state.sqlite")
+    db.executescript("CREATE TABLE run_state (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE attempts (attempt_id TEXT PRIMARY KEY, task_id TEXT, status TEXT, artifact_path TEXT, started_at TEXT, finished_at TEXT, teacher_attempt INTEGER);")
+    db.execute("INSERT INTO run_state VALUES ('status', 'infrastructure_interrupted')")
+    db.commit(); db.close()
+    selected, _ = _find_resume_run(
+        tmp_path / "data", "single_persona",
+        ["934909004241", "895516447505"], purpose="p3a_repair",
+    )
+    assert selected is not None and selected.run_id == "p3a-repair-existing"

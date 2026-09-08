@@ -1,0 +1,31 @@
+{
+  "metadata": {
+    "purpose": "p3a_repair",
+    "scenario": "single_persona",
+    "count": 2,
+    "seed": 1,
+    "source_task_file": "p3a_single_persona_tasks.json",
+    "source_task_ids_sha256": "7be46d1df477cec1222b19a75d20c66c1807dd2e28b0df047adbfacef79033ec",
+    "source_primary_manifest_sha256": "b9009c21b4e7a55a770bae7fe1199f6ef9d9bc61e5f31c98d423123e4581008e",
+    "task_ids_sha256": "30073ec8e62bd654a5c67e1cf59b7f736d5eade87f15543a855791065857d19c",
+    "reason": "replace early infrastructure/config/resume attempt-accounting contamination"
+  },
+  "tasks": [
+    {
+      "task_id": "934909004241",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 1617,
+      "domain": "服饰鞋包饰品",
+      "category": "珠宝/钻石/翡翠›黄金镶嵌首饰›黄金镶宝石›黄金镶宝石戒指"
+    },
+    {
+      "task_id": "895516447505",
+      "scenario": "single_persona",
+      "official_split": "train",
+      "source_index": 1691,
+      "domain": "服饰鞋包饰品",
+      "category": "服饰配件/皮带/帽子/围巾›制衣面料›毛线"
+    }
+  ]
+}

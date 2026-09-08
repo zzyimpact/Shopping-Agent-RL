@@ -90,6 +90,8 @@ def _find_resume_run(
     scenario: str,
     task_ids: list[str],
     expected_config: Mapping[str, Any] | None = None,
+    *,
+    purpose: str = "p3a_profiling",
 ) -> tuple[ResumeRun | None, int]:
     candidates: list[ResumeRun] = []
     incompatible: list[str] = []
@@ -106,7 +108,7 @@ def _find_resume_run(
             import sqlite3
             db = sqlite3.connect(state_path)
             state = db.execute("SELECT value FROM run_state WHERE key='status'").fetchone()
-            if (manifest.get("purpose") != "p3a_profiling"
+            if (manifest.get("purpose") != purpose
                     or manifest.get("scenario") != scenario
                     or manifest.get("status") == "invalidated_by_implementation_bug"
                     or (state and state[0] in {"complete", "invalidated_by_implementation_bug"})):
@@ -228,13 +230,14 @@ def _policy_observation(payload: Mapping[str, Any]) -> str:
 def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_health: Mapping[str, Any],
                   context_hash: str, env_endpoint: str, env_payload: Mapping[str, Any], cfg: Mapping[str, str]) -> dict[str, Any]:
     metadata = task_data.get("metadata", {})
+    purpose = str(metadata.get("purpose", "p3a_profiling"))
     return {
-        "purpose": "p3a_profiling", "run_id": run_id, "scenario": scenario,
+        "purpose": purpose, "run_id": run_id, "scenario": scenario,
         "teacher_model": cfg["TEACHER_API_MODEL"], "api_style": cfg["TEACHER_API_STYLE"],
         "reasoning_effort": cfg["TEACHER_REASONING_EFFORT"], "system_prompt_hash": context_hash,
         "upstream_prompt_hash": context_hash, "selected_task_list_hash": metadata.get("task_ids_sha256"),
         "source_sft_manifest_hash": metadata.get("source_primary_manifest_sha256") or metadata.get("source_manifest_sha256"),
-        "collection_config_hash": canonical_hash({"scenario": scenario, "seed": metadata.get("seed"), "limits": PROFILE_LIMITS}),
+        "collection_config_hash": canonical_hash({"purpose": purpose, "scenario": scenario, "seed": metadata.get("seed"), "task_ids": [str(item["task_id"]) for item in task_data.get("tasks", [])], "limits": PROFILE_LIMITS}),
         "shopsim_source_fingerprint": env_health.get("source_fingerprint", "unknown"),
         "environment_fingerprint": env_health.get("source_fingerprint", "unknown"),
         "environment_version": env_payload.get("environment_version", "task-scoped-v2"),
@@ -254,7 +257,8 @@ def _manifest_for(run_id: str, scenario: str, task_data: Mapping[str, Any], env_
 
 def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: TeacherClient,
                  task_id: str, scenario: str, phase: str, attempt_index: int,
-                 expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop) -> str:
+                 expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop,
+                 resume_command: str | None = None) -> str:
     timings = {"reset": 0.0, "api": 0.0, "step": 0.0, "release": 0.0}
     started = time.monotonic()
     outcome = "interrupted"
@@ -263,6 +267,7 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
             ledger=ledger, env=env, client=client, task_id=task_id, scenario=scenario,
             phase=phase, attempt_index=attempt_index, expected_model=expected_model,
             logger=logger, guard=guard, timings=timings,
+            resume_command=resume_command,
         )
         return outcome
     finally:
@@ -279,7 +284,7 @@ def _run_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Teache
 def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: TeacherClient,
                      task_id: str, scenario: str, phase: str, attempt_index: int,
                      expected_model: str, logger: ProgressLogger, guard: GracefulCollectionStop,
-                     timings: dict[str, float]) -> str:
+                     timings: dict[str, float], resume_command: str | None = None) -> str:
     attempt_id = ledger.start_attempt(task_id, teacher_attempt=attempt_index)
     session_id: str | None = None
     try:
@@ -336,7 +341,7 @@ def _execute_attempt(*, ledger: TeacherLedger, env: TeacherEnvClient, client: Te
                 try:
                     response: TeacherResponse = generate_or_interrupt(
                         client, messages, ledger=ledger, attempt_id=attempt_id, partial_record=partial,
-                        resume_command=f"python3 scripts/profile_teacher.py --scenario {scenario} --resume", logger=logger,
+                        resume_command=resume_command or f"python3 scripts/profile_teacher.py --scenario {scenario} --resume", logger=logger,
                     )
                 finally:
                     timings["api"] += time.monotonic() - call_started
@@ -465,11 +470,32 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
         raise ValueError(".env.teacher 缺少: " + ", ".join(missing))
     task_data = _read_json(task_file)
     tasks = task_data.get("tasks", [])
-    if len(tasks) != 24 or any(item.get("official_split") != "train" or item.get("scenario") not in {None, scenario} for item in tasks):
-        raise ValueError("P3a task list 必须是固定 24 条 TRAIN task")
+    purpose = str(task_data.get("metadata", {}).get("purpose", "p3a_profiling"))
+    expected_count = 2 if purpose == "p3a_repair" else 24
+    if purpose not in {"p3a_profiling", "p3a_repair"}:
+        raise ValueError("task list purpose 必须是 p3a_profiling 或 p3a_repair")
+    if len(tasks) != expected_count or any(item.get("official_split") != "train" or item.get("scenario") not in {None, scenario} for item in tasks):
+        raise ValueError(f"{purpose} task list 必须是固定 {expected_count} 条 TRAIN task")
     task_ids = [str(item["task_id"]) for item in tasks]
-    if len(set(task_ids)) != 24:
+    if len(set(task_ids)) != expected_count:
         raise ValueError("P3a task list 含重复 task_id")
+    if purpose == "p3a_repair":
+        source_name = task_data.get("metadata", {}).get("source_task_file")
+        source_path = task_file.parent / str(source_name) if source_name else None
+        if source_path is None or not source_path.exists():
+            raise ValueError("repair task list 缺少可验证的 source_task_file")
+        source_data = _read_json(source_path)
+        source_metadata = source_data.get("metadata", {})
+        expected_source_hash = task_data.get("metadata", {}).get("source_task_ids_sha256")
+        actual_source_hash = source_metadata.get("task_ids_sha256")
+        if expected_source_hash and expected_source_hash != actual_source_hash:
+            raise ValueError("repair task list 的 source task-list hash 不一致")
+        source_tasks = source_data.get("tasks", [])
+        source_ids = {str(item.get("task_id")) for item in source_tasks
+                      if item.get("official_split") == "train"
+                      and item.get("scenario") in {None, scenario}}
+        if not set(task_ids).issubset(source_ids):
+            raise ValueError("repair task IDs 不属于 frozen Persona profiling task list")
     recorded_ids_hash = task_data.get("metadata", {}).get("task_ids_sha256")
     valid_ids_hashes = {_task_ids_hash(task_ids), _task_ids_hash(task_ids, trailing_newline=True)}
     if recorded_ids_hash and recorded_ids_hash not in valid_ids_hashes:
@@ -496,25 +522,31 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
             "profiler_protocol_version": probe.payload.get(
                 "profiler_protocol_version", PROFILER_PROTOCOL_VERSION
             ),
-        })
+        }, purpose=purpose)
         if selected is None:
             raise FileNotFoundError("没有找到该 scenario 的唯一未完成 profiling run；请去掉 --resume 新建 run")
         run_id = selected.run_id
         logger.line(f"[RESUME] 自动选择最新且配置兼容的未完成 run: {run_id}")
         logger.line(
-            f"[RESUME] status={selected.status} | touched={selected.touched_tasks}/24 | "
-            f"terminal={selected.terminal_tasks}/24 | attempts={selected.attempts} | successes={selected.successes}"
+            f"[RESUME] status={selected.status} | touched={selected.touched_tasks}/{expected_count} | "
+            f"terminal={selected.terminal_tasks}/{expected_count} | attempts={selected.attempts} | successes={selected.successes}"
         )
         if other_count:
             logger.line(f"[RESUME] 已排除 {other_count} 个更早的未完成 run；completed run 不参与 resume。")
     if run_id is None:
-        run_id = "p3a-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+        prefix = "p3a-repair-" if purpose == "p3a_repair" else "p3a-"
+        run_id = prefix + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    logger.line(f"[RUN] purpose={purpose} run_id={run_id} tasks={len(task_ids)}")
     manifest = _manifest_for(run_id, scenario, task_data, health, context.source_hash,
                              env_endpoint, probe.payload, cfg)
     extra = EXTRA_IMMUTABLE
     ledger = TeacherLedger(data_root, manifest, resume=resume, extra_immutable_fields=extra, profile=True)
     _validate_resume_task_manifest(ledger, task_ids)
-    guard = GracefulCollectionStop(ledger, f"python3 scripts/profile_teacher.py --scenario {scenario} --resume", logger)
+    resume_command = (
+        f"python3 scripts/profile_teacher.py --scenario {scenario} "
+        f"--task-file {task_file} --run-id {run_id} --resume"
+    )
+    guard = GracefulCollectionStop(ledger, resume_command, logger)
     guard.install()
     client = TeacherClient(api_url=cfg["TEACHER_API_URL"], api_key=cfg["TEACHER_API_KEY"], model=cfg["TEACHER_API_MODEL"],
                            api_style=cfg["TEACHER_API_STYLE"], reasoning_effort=cfg["TEACHER_REASONING_EFFORT"],
@@ -536,10 +568,10 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
                 else: first_attempts += 1
             if not successes:
                 while not successes and first_attempts < PROFILE_LIMITS["first_success_max_attempts"]:
-                    logger.line(f"[{scenario}] Task {ordinal:02d}/24 | Phase: first_success | Attempt: {first_attempts + 1}/3")
+                    logger.line(f"[{scenario}] Task {ordinal:02d}/{expected_count} | Phase: first_success | Attempt: {first_attempts + 1}/3")
                     status = _run_attempt(ledger=ledger, env=env, client=client, task_id=task_id, scenario=scenario,
                                           phase="first_success", attempt_index=first_attempts + 1, expected_model=cfg["TEACHER_API_MODEL"],
-                                          logger=logger, guard=guard)
+                                          logger=logger, guard=guard, resume_command=resume_command)
                     first_attempts += 1
                     successes = _success_records(ledger, task_id)
                     logger.line(f"[{scenario}] {task_id}: {status}")
@@ -549,10 +581,10 @@ def run_profile(*, scenario: str, env_endpoint: str, task_file: Path, data_root:
                     ledger.mark_profile_unsolved(task_id)
                     continue
             while successes and second_attempts < PROFILE_LIMITS["second_demo_max_attempts"]:
-                logger.line(f"[{scenario}] Task {ordinal:02d}/24 | Phase: second_demo | Attempt: {second_attempts + 1}/2")
+                logger.line(f"[{scenario}] Task {ordinal:02d}/{expected_count} | Phase: second_demo | Attempt: {second_attempts + 1}/2")
                 _run_attempt(ledger=ledger, env=env, client=client, task_id=task_id, scenario=scenario,
                              phase="second_demo", attempt_index=second_attempts + 1, expected_model=cfg["TEACHER_API_MODEL"],
-                             logger=logger, guard=guard)
+                             logger=logger, guard=guard, resume_command=resume_command)
                 second_attempts += 1
                 successes = _success_records(ledger, task_id)
         ledger.set_state("status", "complete")

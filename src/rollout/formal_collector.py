@@ -217,6 +217,29 @@ class CollectorLog:
             return f"[{event}] pass={fields.get('pass', '-')} accepted={fields.get('accepted', '-')}"
         return None
 
+    def terminal_progress(self, state: Mapping[str, Any], *, accepted: int) -> None:
+        """Print cumulative debugging progress without writing another log event."""
+        if self.stream is None:
+            return
+        slots = state.get("slots", {})
+        completed = sum(
+            1 for slot in slots.values() if slot.get("fulfilled") or slot.get("exhausted")
+        )
+        total_tasks = len(slots)
+        trajectories = int(state.get("genuine_attempts", 0))
+        target = int(state.get("target", 0))
+        task_pct = 100.0 * completed / total_tasks if total_tasks else 0.0
+        success_rate = 100.0 * accepted / trajectories if trajectories else 0.0
+        target_pct = 100.0 * accepted / target if target else 0.0
+        with self._lock:
+            print(
+                f"[STATUS] tasks={completed}/{total_tasks} ({task_pct:.2f}%) "
+                f"| successful_trajectories={accepted} | total_trajectories={trajectories} "
+                f"| success_rate={success_rate:.2f}% "
+                f"| success_target={accepted}/{target} ({target_pct:.2f}%)",
+                file=self.stream, flush=True,
+            )
+
 
 @dataclass(frozen=True)
 class WorkItem:
@@ -402,6 +425,8 @@ def reconcile_attempts(
                          wall_s=record.get("trajectory_attempt_wall_time_s", 0.0),
                          api_s=record.get("api_latency_total_s", 0.0),
                          steps=len(record.get("actions", [])))
+        if applied_status not in INFRA_STATUSES:
+            logger.terminal_progress(state, accepted=ledger.accepted_count())
     state["active_task_ids"] = []
     dump_state(ledger, state)
 

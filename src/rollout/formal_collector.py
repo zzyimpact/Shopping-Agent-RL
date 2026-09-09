@@ -8,6 +8,7 @@ rollout，因此 reserve、same-task 与 6000 quota 不依赖分布式锁。
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -24,7 +25,7 @@ import uuid
 from env.teacher_env_client import TeacherEnvClient, TeacherEnvError
 from rollout.collection_policy import has_deterministic_no_progress_loop
 from rollout.collection_policy import load_collection_policy
-from rollout.concurrency import GlobalStop, WorkerCancelled, run_bounded
+from rollout.concurrency import GlobalStop, WorkerCancelled, MAX_WORKERS
 from rollout.diversity import behavior_fingerprint, exact_duplicate, similarity_features
 from rollout.profiler import _metrics, _policy_observation, _valid_visible_action
 from rollout.prompt import (append_turn, assert_no_evaluator_leakage,
@@ -40,6 +41,7 @@ FORMAL_EXTRA_IMMUTABLE = (
     "policy_observation_version", "profiler_protocol_version", "max_action_steps",
     "environment_fingerprint", "selected_primary_hash",
 )
+SCHEDULER_VERSION = "completion-driven-rolling-v1"
 TERMINAL_RUN_STATES = {"complete", "quota_unmet"}
 INFRA_STATUSES = {
     "infrastructure_interrupted", "provider_config_error", "provider_model_mismatch",
@@ -305,9 +307,10 @@ def _read_attempt(ledger: TeacherLedger, relative_path: str) -> dict[str, Any]:
 
 
 def _accepted_for_task(ledger: TeacherLedger, task_id: str) -> list[dict[str, Any]]:
-    rows = ledger.db.execute(
-        "SELECT artifact_path FROM accepted WHERE task_id=? ORDER BY rowid", (task_id,)
-    ).fetchall()
+    with ledger._lock:
+        rows = ledger.db.execute(
+            "SELECT artifact_path FROM accepted WHERE task_id=? ORDER BY rowid", (task_id,)
+        ).fetchall()
     return [_read_attempt(ledger, str(row[0])) for row in rows]
 
 
@@ -389,11 +392,15 @@ def reconcile_attempts(
 ) -> None:
     """Exactly-once apply terminal attempts; also repairs crash-after-accept."""
     processed = set(state["processed_attempt_ids"])
-    rows = ledger.db.execute(
-        "SELECT attempt_id,status,artifact_path FROM attempts ORDER BY rowid"
-    ).fetchall()
-    for attempt_id, status, relative_path in rows:
-        if attempt_id in processed or status == "in_progress":
+    active = set(state.get("active_task_ids", []))
+    with ledger._lock:
+        rows = ledger.db.execute(
+            "SELECT attempt_id,status,artifact_path,task_id FROM attempts ORDER BY rowid"
+        ).fetchall()
+    for attempt_id, status, relative_path, task_id in rows:
+        # A worker may have persisted its result but still be releasing its session.
+        # Reconcile only after its future has returned, never an active sibling.
+        if task_id in active or attempt_id in processed or status == "in_progress":
             continue
         record = _read_attempt(ledger, str(relative_path))
         work = record.get("formal_work")
@@ -427,7 +434,6 @@ def reconcile_attempts(
                          steps=len(record.get("actions", [])))
         if applied_status not in INFRA_STATUSES:
             logger.terminal_progress(state, accepted=ledger.accepted_count())
-    state["active_task_ids"] = []
     dump_state(ledger, state)
 
 
@@ -478,7 +484,8 @@ def _pass_a_work(
     work: list[WorkItem] = []
     for slot_id in sorted(state["slots"], key=int):
         slot = state["slots"][slot_id]
-        if slot["fulfilled"] or slot["exhausted"]:
+        if (slot["fulfilled"] or slot["exhausted"]
+                or slot["current_task_id"] in state.get("active_task_ids", [])):
             continue
         while True:
             task_id = str(slot["current_task_id"])
@@ -499,7 +506,8 @@ def _pass_a_work(
 def _pass_b_work(state: dict[str, Any], *, workers: int) -> list[WorkItem]:
     rows = []
     for task_id, task in state["tasks"].items():
-        if task["first_success"] and not task["b_done"] and task["b_attempts"] < 2:
+        if (task_id not in state.get("active_task_ids", [])
+                and task["first_success"] and not task["b_done"] and task["b_attempts"] < 2):
             rows.append(WorkItem(
                 "B", task_id, int(task["coverage_slot"]), str(task["source"]),
                 int(task["b_attempts"]) + 1,
@@ -528,7 +536,8 @@ def _pass_c_work(
         accepted_by_stratum[str(task["stratum"])] += int(task["accepted_count"])
     eligible = []
     for task_id, task in state["tasks"].items():
-        if (task["first_success"] and task["accepted_count"] < 3
+        if (task_id not in state.get("active_task_ids", [])
+                and task["first_success"] and task["accepted_count"] < 3
                 and task["post_attempts"] < 3):
             deficit = targets.get(str(task["stratum"]), 0) - accepted_by_stratum[str(task["stratum"])]
             eligible.append((int(task["accepted_count"]), -deficit,
@@ -545,7 +554,10 @@ def next_work(
     state: dict[str, Any], inputs: TaskInputs, logger: CollectorLog, *, workers: int,
     first_cap: int = 2, stop_after_pass: str | None = None,
 ) -> list[WorkItem]:
+    if workers <= 0:
+        return []
     while True:
+        active_count = len(state.get("active_task_ids", []))
         accepted = sum(int(task["accepted_count"]) for task in state["tasks"].values())
         if accepted >= int(state["target"]):
             state["status"] = "complete"
@@ -555,6 +567,8 @@ def next_work(
             work = _pass_a_work(state, inputs, logger, workers=workers, first_cap=first_cap)
             if work:
                 return work
+            if active_count:
+                return []
             if stop_after_pass == "A":
                 state["status"] = "complete" if accepted >= int(state["target"]) else "quota_unmet"
                 return []
@@ -565,13 +579,18 @@ def next_work(
             work = _pass_b_work(state, workers=workers)
             if work:
                 return work
+            if active_count:
+                return []
             state["current_pass"] = "C"
             logger.event("PASS_START", pass_name="C")
             continue
-        remaining = int(state["target"]) - accepted
+        # Every in-flight attempt conservatively reserves one possible success.
+        remaining = int(state["target"]) - accepted - active_count
         work = _pass_c_work(state, inputs, workers=workers, remaining_quota=remaining)
         if work:
             return work
+        if active_count:
+            return []
         state["status"] = "quota_unmet"
         return []
 
@@ -814,7 +833,11 @@ def run_engine(
 ) -> dict[str, Any]:
     """运行 A/B/C；测试与 paid smoke 均调用这一入口。"""
     stop = stop or GlobalStop()
+    if not isinstance(workers, int) or not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     mark_stale_in_progress(ledger)
+    state["active_task_ids"] = []
+    state["in_flight_work"] = []
     reconcile_attempts(ledger, state, logger)
     max_steps = int(policy["protocol"]["max_action_steps"])
     sanitized = {
@@ -824,45 +847,85 @@ def run_engine(
         "request_semantics": policy["teacher"]["request_semantics"],
     }
     logger.event("PASS_START", pass_name=state["current_pass"])
-    while not stop.is_set() and state["status"] == "in_progress":
-        work = next_work(
-            state, inputs, logger, workers=workers, first_cap=first_cap,
-            stop_after_pass=stop_after_pass,
-        )
-        if not work:
-            dump_state(ledger, state)
-            break
-        task_ids = [item.task_id for item in work]
-        if len(task_ids) != len(set(task_ids)):
-            raise RuntimeError("scheduler invariant: same task dispatched concurrently")
-        state["active_task_ids"] = task_ids
-        dump_state(ledger, state)  # reserve allocation/active set persisted before dispatch
-        results = run_bounded(
-            work,
-            lambda item, event: execute_rollout(
-                item, event, ledger=ledger, scenario=str(ledger.manifest["scenario"]),
+    def invoke(item: WorkItem) -> AttemptResult:
+        try:
+            stop.check_before_external_call()
+            return execute_rollout(
+                item, stop, ledger=ledger, scenario=str(ledger.manifest["scenario"]),
                 expected_model=str(policy["teacher"]["model"]), max_action_steps=max_steps,
                 logger=logger, client_factory=client_factory, env_factory=env_factory,
                 sanitized_teacher_config=sanitized,
-            ),
-            workers=workers, stop=stop,
-        )
-        fatal = next(
-            (row.error for row in results
-             if row.error is not None and not isinstance(row.error, WorkerCancelled)),
-            None,
-        )
-        reconcile_attempts(ledger, state, logger)
-        if fatal is not None:
-            stop.set()
-            state["last_error"] = _safe_error_class(fatal)
-            logger.event("INFRA_STOP", classification=_safe_error_class(fatal))
-        accepted = ledger.accepted_count()
-        last_progress = int(state.get("last_progress_accepted", 0))
-        if accepted >= last_progress + 25:
-            logger.event("PROGRESS", pass_name=state["current_pass"], accepted=accepted)
-            state["last_progress_accepted"] = accepted - (accepted % 25)
+            )
+        except BaseException:
+            stop.set()  # Signal siblings immediately, not when main consumes this future.
+            raise
+
+    in_flight: dict[Future[AttemptResult], WorkItem] = {}
+
+    def persist_reservations() -> None:
+        state["active_task_ids"] = [item.task_id for item in in_flight.values()]
+        state["in_flight_work"] = [dict(item.__dict__) for item in in_flight.values()]
         dump_state(ledger, state)
+
+    # One executor survives refills (and drained Pass boundaries). No static backlog.
+    try:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="teacher-worker") as pool:
+            try:
+                while in_flight or (not stop.is_set() and state["status"] == "in_progress"):
+                    while (not stop.is_set() and state["status"] == "in_progress"
+                           and len(in_flight) < workers):
+                        work = next_work(
+                            state, inputs, logger, workers=1, first_cap=first_cap,
+                            stop_after_pass=stop_after_pass,
+                        )
+                        if not work:
+                            break
+                        item = work[0]
+                        if item.task_id in state["active_task_ids"]:
+                            raise RuntimeError("scheduler invariant: same task dispatched concurrently")
+                        # Reservation survives a crash even before the worker starts its ledger attempt.
+                        state["active_task_ids"].append(item.task_id)
+                        state["in_flight_work"].append(dict(item.__dict__))
+                        dump_state(ledger, state)
+                        if stop.is_set():
+                            persist_reservations()
+                            break
+                        in_flight[pool.submit(invoke, item)] = item
+                    if not in_flight:
+                        break
+                    completed, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    # Stable order only among already-completed futures; never wait on a sibling.
+                    for future in sorted(completed, key=lambda f: (
+                        in_flight[f].coverage_slot, in_flight[f].task_id
+                    )):
+                        in_flight.pop(future)
+                        try:
+                            future.result()
+                        except WorkerCancelled:
+                            stop.set()
+                        except BaseException as exc:
+                            stop.set()
+                            state["last_error"] = _safe_error_class(exc)
+                            logger.event("INFRA_STOP", classification=_safe_error_class(exc))
+                    persist_reservations()
+                    reconcile_attempts(ledger, state, logger)
+                    accepted = ledger.accepted_count()
+                    last_progress = int(state.get("last_progress_accepted", 0))
+                    if accepted >= last_progress + 25:
+                        logger.event("PROGRESS", pass_name=state["current_pass"],
+                                     accepted=accepted, in_flight=len(in_flight))
+                        state["last_progress_accepted"] = accepted - (accepted % 25)
+                    dump_state(ledger, state)
+            except BaseException:
+                stop.set()  # Join/persist in-flight work before the caller can close SQLite.
+                raise
+    except BaseException:
+        state["active_task_ids"] = []
+        state["in_flight_work"] = []
+        reconcile_attempts(ledger, state, logger)
+        state["status"] = "stopped"
+        dump_state(ledger, state)
+        raise
     if stop.is_set() and state["status"] == "in_progress":
         state["status"] = "stopped"
         dump_state(ledger, state)
@@ -1116,6 +1179,25 @@ def run_from_configuration(
             if state["status"] not in TERMINAL_RUN_STATES:
                 state["status"] = "in_progress"
             logger.event("RESUME", workers=workers, policy=policy["identity"]["policy_version"])
+
+        history = state.setdefault("scheduler_history", [])
+        history.append({
+            "scheduler_version": SCHEDULER_VERSION, "git_commit": git_commit(project_root),
+            "started_at": utc_now(), "run_id": resolved_run_id,
+            "policy_version": policy["identity"]["policy_version"],
+            "previous_scheduler": history[-1]["scheduler_version"] if history else ("fixed-micro-batch" if resume else None),
+            "previous_manifest_commit": ledger.manifest.get("git_commit"),
+            "attempt_rowid_boundary": ledger.db.execute(
+                "SELECT COALESCE(MAX(rowid), 0) FROM attempts"
+            ).fetchone()[0],
+            "accepted_before_resume": ledger.accepted_count(),
+            "genuine_attempts_before_resume": state["genuine_attempts"],
+            "current_pass": state["current_pass"], "workers": workers,
+        })
+        dump_state(ledger, state)
+        logger.event("SCHEDULER_START", scheduler=SCHEDULER_VERSION,
+                     commit=history[-1]["git_commit"],
+                     attempt_rowid_boundary=history[-1]["attempt_rowid_boundary"])
 
         def client_factory(on_retry: Callable[..., None]) -> TeacherClient:
             return TeacherClient(

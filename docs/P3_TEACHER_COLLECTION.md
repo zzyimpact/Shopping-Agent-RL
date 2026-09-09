@@ -165,3 +165,13 @@ python3 scripts/profile_teacher.py \
 `--run-id` 必须来自同一 scenario 且配置兼容的 run；不会删除、覆盖或合并其他 run。
 如果没有兼容的未完成 run，命令会拒绝 resume 并要求恢复原配置或新建 run。P3a 不自动
 调用另一个 API smoke、不做 concurrent workers，也不开始 P3b。
+
+## P3c rolling scheduler implementation correction
+
+Formal collector 现采用 completion-driven rolling refill，默认 workers=8 不变；
+`run_bounded` 仍用于原 probe，formal engine 的动态 eligibility 不再经过该整批接口。
+严格保留 A → B → C barrier、same-task exclusion、持久化 reserve、串行 acceptance
+及 Pass C 在途成功名额预留。两个已有 run 原地手动 resume；数据不作废。
+版本切换及静态检查边界见 `P3C_FORMAL_COLLECTOR.md` 的 rolling correction。
+Relay URL/key/API style 可跨 resume 修改，以该文档和当前 formal CLI 为准；
+本页早期 P3-0 的 immutable transport 描述不适用于当前 formal hotfix。

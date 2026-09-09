@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -46,7 +47,34 @@ def transfer(source: str, destination: str, *, timeout: float = 90) -> int:
             process.wait()
 
 
+def manifest_valid(path: Path, *, expected_count: int, expected_hash: str) -> bool:
+    # Use the same frozen manifest validator as formal preflight, without creating clients.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from rollout.formal_collector import load_manifest
+    try:
+        load_manifest(path, expected_count=expected_count, expected_hash=expected_hash)
+        return True
+    except (ValueError, OSError, TypeError, KeyError):
+        return False
+
+
+def check_manifest(path: Path, name: str) -> bool:
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "src"))
+    from rollout.collection_policy import load_collection_policy
+    policy = load_collection_policy(root / "configs/teacher/formal_collection_p3b_v1_1.yaml")
+    for scenario in policy["scope"]["scenarios"]:
+        source = policy["task_sources"][scenario]
+        for kind in ("train", "primary"):
+            if source[kind + "_manifest"] == name:
+                return manifest_valid(path, expected_count=source[kind + "_task_count"],
+                                      expected_hash=source[kind + "_task_ids_sha256"])
+    return False
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == "--check-manifest":
+        raise SystemExit(0 if check_manifest(Path(sys.argv[2]), sys.argv[3]) else 1)
     if len(sys.argv) != 3:
         raise SystemExit("usage: teacher_env_transfer.py SOURCE DESTINATION")
     try:

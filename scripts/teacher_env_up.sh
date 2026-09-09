@@ -26,10 +26,21 @@ mkdir -p "${MANIFEST_CACHE}"
 for manifest_name in \
   train_single.json train_single_persona.json \
   sft_task_manifest_single.json sft_task_manifest_single_persona.json; do
-  echo "Downloading manifest: ${manifest_name} (90s transfer limit)"
+  if python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" --check-manifest \
+      "${MANIFEST_CACHE}/${manifest_name}" "${manifest_name}"; then
+    echo "Using verified frozen manifest: ${manifest_name}"
+    continue
+  fi
+  echo "Downloading missing/invalid manifest: ${manifest_name} (90s transfer limit)"
   manifest_temp="$(mktemp "${MANIFEST_CACHE}/.${manifest_name}.XXXXXX")"
   if python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" \
       "${REMOTE_HOST}:/root/data/shopsim/manifests/${manifest_name}" "${manifest_temp}"; then
+    if ! python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" --check-manifest \
+        "${manifest_temp}" "${manifest_name}"; then
+      rm -f "${manifest_temp}"
+      echo "Downloaded manifest does not match frozen policy: ${manifest_name}" >&2
+      exit 1
+    fi
     mv "${manifest_temp}" "${MANIFEST_CACHE}/${manifest_name}"
     echo "Downloaded: ${manifest_name}"
   else

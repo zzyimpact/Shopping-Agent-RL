@@ -78,15 +78,23 @@ def inspect(data_root: Path, scenario: str, run_id: str | None, last: int) -> in
         elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(state["started_at"])).total_seconds()
     except (TypeError, ValueError):
         elapsed = 0.0
+    history = state.get("scheduler_history", [])
+    runtime = history[-1] if history else {}
+    workers = state.get("runtime_workers", runtime.get("workers", manifest["workers"]))
+    capacities = runtime.get("api_workers", {})
+    capacity_arg = (
+        "--api-workers " + ",".join(f"{key}:{count}" for key, count in capacities.items())
+        if capacities and "legacy" not in capacities else f"--workers {workers}"
+    )
     resume = (
-        f"python3 scripts/collect_teacher.py --scenario {scenario} --workers {manifest['workers']} "
+        f"python3 scripts/collect_teacher.py --scenario {scenario} {capacity_arg} "
         f"--run-id {manifest['run_id']} --resume"
     )
     rows = [
         ("Run ID", manifest["run_id"]), ("Status", state["status"]),
         ("Scenario", scenario),
         ("Policy", f"{manifest['policy_version']} / {manifest['policy_hash'][:12]}…"),
-        ("Workers", manifest["workers"]), ("Current pass", state["current_pass"]),
+        ("Workers", workers), ("Current pass", state["current_pass"]),
         ("Coverage slots", f"{completed}/{len(state['slots'])}"),
         ("Unique successful", unique), ("Accepted", accepted),
         ("Genuine attempts", state["genuine_attempts"]),

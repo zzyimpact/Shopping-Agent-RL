@@ -36,7 +36,7 @@ from rollout.teacher_client import TeacherClient, TeacherClientError, TeacherRes
 
 
 FORMAL_EXTRA_IMMUTABLE = (
-    "purpose", "policy_version", "policy_hash", "workers", "seed",
+    "purpose", "policy_version", "policy_hash", "seed",
     "primary_manifest_hash", "train_manifest_hash",
     "policy_observation_version", "profiler_protocol_version", "max_action_steps",
     "environment_fingerprint", "selected_primary_hash",
@@ -163,6 +163,7 @@ class CollectorLog:
         self.run_id = run_id
         self.stream = stream
         self._lock = threading.RLock()
+        self.task_api_profiles: dict[str, str] = {}
 
     @staticmethod
     def _safe(value: Any) -> str:
@@ -193,9 +194,11 @@ class CollectorLog:
             return f"[{event}] scenario={self.scenario} run_id={self.run_id} workers={fields.get('workers', '-')}"
         if event == "PASS_START":
             return f"[{self.scenario}] Pass {fields.get('pass', '-')} started"
+        profile = self.task_api_profiles.get(str(fields.get("task", "")))
+        prefix = f"[{self.scenario}]" + (f"[api={profile}]" if profile else "")
         if event == "ATTEMPT_START":
             return (
-                f"[{self.scenario}] Task {fields.get('task', '-')} | Pass {fields.get('pass', '-')} "
+                f"{prefix} Task {fields.get('task', '-')} | Pass {fields.get('pass', '-')} "
                 f"| Attempt {fields.get('attempt', '-')}"
             )
         if event == "API_RETRY":
@@ -209,7 +212,7 @@ class CollectorLog:
                 "REJECT_EXACT_DUPLICATE": "exact_duplicate",
             }[event]
             return (
-                f"[{self.scenario}] Task {fields.get('task', '-')} finished | outcome={outcome} "
+                f"{prefix} Task {fields.get('task', '-')} finished | outcome={outcome} "
                 f"| wall={float(fields.get('wall_s', 0.0)):.2f}s "
                 f"| API={float(fields.get('api_s', 0.0)):.2f}s | steps={fields.get('steps', 0)}"
             )
@@ -810,7 +813,7 @@ def summary_from_state(ledger: TeacherLedger, state: Mapping[str, Any]) -> dict[
     return {
         "run_id": ledger.manifest["run_id"], "status": state["status"],
         "scenario": ledger.manifest["scenario"], "policy_version": ledger.manifest["policy_version"],
-        "workers": ledger.manifest["workers"], "current_pass": state["current_pass"],
+        "workers": state.get("runtime_workers", ledger.manifest["workers"]), "current_pass": state["current_pass"],
         "coverage_slots_completed": sum(
             1 for slot in state["slots"].values() if slot["fulfilled"] or slot["exhausted"]
         ),
@@ -830,11 +833,20 @@ def run_engine(
     client_factory: Callable[[Callable[..., None]], Any], env_factory: Callable[[], Any],
     stop: GlobalStop | None = None, first_cap: int = 2,
     stop_after_pass: str | None = None, api_style: str | None = None,
+    api_profiles: Mapping[str, tuple[int, Callable[..., Any], str]] | None = None,
 ) -> dict[str, Any]:
     """运行 A/B/C；测试与 paid smoke 均调用这一入口。"""
     stop = stop or GlobalStop()
     if not isinstance(workers, int) or not 1 <= workers <= MAX_WORKERS:
         raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
+    profiles = dict(api_profiles) if api_profiles is not None else {
+        "legacy": (workers, client_factory, api_style or policy["teacher"]["api_style"])
+    }
+    if (not profiles or any(capacity < 1 for capacity, _, _ in profiles.values())
+            or sum(capacity for capacity, _, _ in profiles.values()) != workers):
+        raise ValueError("API profile capacities must be positive and sum to workers")
+    profile_active = dict.fromkeys(profiles, 0)
+    state["runtime_workers"] = workers
     mark_stale_in_progress(ledger)
     state["active_task_ids"] = []
     state["in_flight_work"] = []
@@ -847,20 +859,21 @@ def run_engine(
         "request_semantics": policy["teacher"]["request_semantics"],
     }
     logger.event("PASS_START", pass_name=state["current_pass"])
-    def invoke(item: WorkItem) -> AttemptResult:
+    def invoke(item: WorkItem, profile_id: str) -> AttemptResult:
         try:
             stop.check_before_external_call()
             return execute_rollout(
                 item, stop, ledger=ledger, scenario=str(ledger.manifest["scenario"]),
                 expected_model=str(policy["teacher"]["model"]), max_action_steps=max_steps,
-                logger=logger, client_factory=client_factory, env_factory=env_factory,
-                sanitized_teacher_config=sanitized,
+                logger=logger, client_factory=profiles[profile_id][1], env_factory=env_factory,
+                sanitized_teacher_config={**sanitized, "api_style": profiles[profile_id][2]},
             )
         except BaseException:
             stop.set()  # Signal siblings immediately, not when main consumes this future.
             raise
 
     in_flight: dict[Future[AttemptResult], WorkItem] = {}
+    future_profiles: dict[Future[AttemptResult], str] = {}
 
     def persist_reservations() -> None:
         state["active_task_ids"] = [item.task_id for item in in_flight.values()]
@@ -874,6 +887,10 @@ def run_engine(
                 while in_flight or (not stop.is_set() and state["status"] == "in_progress"):
                     while (not stop.is_set() and state["status"] == "in_progress"
                            and len(in_flight) < workers):
+                        profile_id = next(
+                            key for key, (capacity, _, _) in profiles.items()
+                            if profile_active[key] < capacity
+                        )
                         work = next_work(
                             state, inputs, logger, workers=1, first_cap=first_cap,
                             stop_after_pass=stop_after_pass,
@@ -890,7 +907,12 @@ def run_engine(
                         if stop.is_set():
                             persist_reservations()
                             break
-                        in_flight[pool.submit(invoke, item)] = item
+                        if profile_id != "legacy":
+                            logger.task_api_profiles[item.task_id] = profile_id
+                        future = pool.submit(invoke, item, profile_id)
+                        in_flight[future] = item
+                        future_profiles[future] = profile_id
+                        profile_active[profile_id] += 1
                     if not in_flight:
                         break
                     completed, _ = wait(in_flight, return_when=FIRST_COMPLETED)
@@ -899,6 +921,7 @@ def run_engine(
                         in_flight[f].coverage_slot, in_flight[f].task_id
                     )):
                         in_flight.pop(future)
+                        profile_active[future_profiles.pop(future)] -= 1
                         try:
                             future.result()
                         except WorkerCancelled:
@@ -909,6 +932,9 @@ def run_engine(
                             logger.event("INFRA_STOP", classification=_safe_error_class(exc))
                     persist_reservations()
                     reconcile_attempts(ledger, state, logger)
+                    for task_id in list(logger.task_api_profiles):
+                        if task_id not in state["active_task_ids"]:
+                            del logger.task_api_profiles[task_id]
                     accepted = ledger.accepted_count()
                     last_progress = int(state.get("last_progress_accepted", 0))
                     if accepted >= last_progress + 25:
@@ -1006,11 +1032,28 @@ def print_summary(summary: Mapping[str, Any], *, resume_command: str | None = No
         print(f"Resume with: {resume_command}")
 
 
+def parse_api_workers(value: str) -> dict[str, int]:
+    capacities: dict[str, int] = {}
+    for entry in value.split(","):
+        parts = entry.strip().split(":")
+        if (len(parts) != 2 or not all(p.isascii() and p.isdecimal() for p in parts)
+                or int(parts[0]) < 1 or int(parts[1]) < 1):
+            raise ValueError("--api-workers 格式为 1:8,2:12；profile 和 workers 必须为正整数")
+        profile_id, count = str(int(parts[0])), int(parts[1])
+        if profile_id in capacities:
+            raise ValueError("--api-workers 含重复 profile ID")
+        capacities[profile_id] = count
+    if sum(capacities.values()) > MAX_WORKERS:
+        raise ValueError(f"total workers must be <= {MAX_WORKERS}")
+    return capacities
+
+
 def run_from_configuration(
     *, project_root: Path, scenario: str, policy_path: Path, manifest_dir: Path,
     data_root: Path, env_file: Path, endpoint: str, workers: int,
     resume: bool = False, run_id: str | None = None,
     selected_primary_ids: Sequence[str] | None = None, smoke: bool = False,
+    api_workers: str | None = None,
 ) -> dict[str, Any]:
     """完成 no-paid preflight 后构造/恢复 run 并调用真正 formal engine。"""
     from rollout.teacher_client import load_env_file
@@ -1020,17 +1063,14 @@ def run_from_configuration(
         raise ValueError("P3c 默认只接受 p3b-v1.1")
     if scenario not in policy["scope"]["scenarios"]:
         raise ValueError(f"policy 不支持 scenario: {scenario}")
-    if not int(policy["concurrency"]["workers_min"]) <= workers <= int(
-        policy["concurrency"]["workers_max_guard"]
-    ):
-        raise ValueError("workers 超出 policy guard")
+    capacities = parse_api_workers(api_workers) if api_workers is not None else {"legacy": workers}
+    workers = sum(capacities.values())
+    if not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     if not env_file.is_file():
         raise FileNotFoundError(f"缺少 teacher env file: {env_file}")
     cfg = load_env_file(str(env_file))
-    required = (
-        "TEACHER_API_URL", "TEACHER_API_KEY", "TEACHER_API_MODEL",
-        "TEACHER_API_STYLE", "TEACHER_REASONING_EFFORT",
-    )
+    required = ("TEACHER_API_MODEL", "TEACHER_REASONING_EFFORT")
     missing = [key for key in required if not cfg.get(key)]
     if missing:
         raise ValueError(".env.teacher 缺少: " + ", ".join(missing))
@@ -1041,8 +1081,18 @@ def run_from_configuration(
     mismatched = [key for key, value in expected_cfg.items() if cfg.get(key) != value]
     if mismatched:
         raise ValueError("teacher config 与 p3b-v1.1 不一致: " + ", ".join(mismatched))
-    if cfg["TEACHER_API_STYLE"] not in {"chat_completions", "responses"}:
-        raise ValueError("TEACHER_API_STYLE 必须是 chat_completions 或 responses")
+    # Credentials stay inside client factory closures; never enter run/trajectory metadata.
+    transports = {}
+    for profile_id in capacities:
+        suffix = "" if profile_id == "legacy" else f"_{profile_id}"
+        url, key = cfg.get(f"TEACHER_API_URL{suffix}"), cfg.get(f"TEACHER_API_KEY{suffix}")
+        style = cfg.get(f"TEACHER_API_STYLE{suffix}", cfg.get("TEACHER_API_STYLE", ""))
+        if not url or not key:
+            raise ValueError(f"缺少 TEACHER_API_URL{suffix} / TEACHER_API_KEY{suffix}")
+        if style not in {"chat_completions", "responses"}:
+            raise ValueError(f"TEACHER_API_STYLE{suffix} 必须是 chat_completions 或 responses")
+        transports[profile_id] = (url, key, style)
+    first_style = next(iter(transports.values()))[2]
 
     inputs = load_task_inputs(
         manifest_dir, policy, scenario, selected_primary_ids=selected_primary_ids,
@@ -1100,7 +1150,7 @@ def run_from_configuration(
         "policy_hash": policy["identity"]["policy_hash"],
         "teacher_model": policy["teacher"]["model"],
         "reasoning_effort": policy["teacher"]["reasoning_effort"],
-        "workers": workers, "seed": policy["identity"]["seed"],
+        "seed": policy["identity"]["seed"],
         "primary_manifest_hash": inputs.primary_manifest_hash,
         "train_manifest_hash": inputs.train_manifest_hash,
         "system_prompt_hash": context.source_hash,
@@ -1122,12 +1172,12 @@ def run_from_configuration(
             (data_root / scenario / resolved_run_id / "run_manifest.json").read_text(encoding="utf-8")
         )
     manifest = {
-        **expected_resume, "run_id": resolved_run_id,
+        **expected_resume, "run_id": resolved_run_id, "workers": workers,
         # Keep historical manifest provenance untouched while allowing the
         # current relay transport to change between resume sessions.
         "api_style": (
-            persisted_transport.get("api_style", cfg["TEACHER_API_STYLE"])
-            if persisted_transport else cfg["TEACHER_API_STYLE"]
+            persisted_transport.get("api_style", first_style)
+            if persisted_transport else first_style
         ),
         "sanitized_request_config_hash": (
             persisted_transport.get("sanitized_request_config_hash", canonical_hash(sanitized_request))
@@ -1154,9 +1204,13 @@ def run_from_configuration(
     )
     log_path = data_root / "collector.log"
     logger = CollectorLog(log_path, scenario=scenario, run_id=resolved_run_id, stream=sys.stdout)
+    capacity_arg = (
+        "--api-workers " + ",".join(f"{key}:{count}" for key, count in capacities.items())
+        if api_workers is not None else f"--workers {workers}"
+    )
     resume_command = (
         f"python3 scripts/collect_teacher.py --scenario {scenario} "
-        f"--workers {workers} --run-id {resolved_run_id} --resume"
+        f"{capacity_arg} --run-id {resolved_run_id} --resume"
     )
     stop = GlobalStop()
     old_handler = signal.getsignal(signal.SIGINT)
@@ -1180,6 +1234,7 @@ def run_from_configuration(
                 state["status"] = "in_progress"
             logger.event("RESUME", workers=workers, policy=policy["identity"]["policy_version"])
 
+        state["runtime_workers"] = workers
         history = state.setdefault("scheduler_history", [])
         history.append({
             "scheduler_version": SCHEDULER_VERSION, "git_commit": git_commit(project_root),
@@ -1193,18 +1248,28 @@ def run_from_configuration(
             "accepted_before_resume": ledger.accepted_count(),
             "genuine_attempts_before_resume": state["genuine_attempts"],
             "current_pass": state["current_pass"], "workers": workers,
+            "api_workers": capacities,
         })
         dump_state(ledger, state)
         logger.event("SCHEDULER_START", scheduler=SCHEDULER_VERSION,
                      commit=history[-1]["git_commit"],
                      attempt_rowid_boundary=history[-1]["attempt_rowid_boundary"])
 
-        def client_factory(on_retry: Callable[..., None]) -> TeacherClient:
-            return TeacherClient(
-                api_url=cfg["TEACHER_API_URL"], api_key=cfg["TEACHER_API_KEY"],
-                model=cfg["TEACHER_API_MODEL"], api_style=cfg["TEACHER_API_STYLE"],
-                reasoning_effort=cfg["TEACHER_REASONING_EFFORT"], on_retry=on_retry,
-            )
+        def make_client_factory(transport: tuple[str, str, str]) -> Callable[..., TeacherClient]:
+            url, key, style = transport
+
+            def factory(on_retry: Callable[..., None]) -> TeacherClient:
+                return TeacherClient(
+                    api_url=url, api_key=key, model=cfg["TEACHER_API_MODEL"], api_style=style,
+                    reasoning_effort=cfg["TEACHER_REASONING_EFFORT"], on_retry=on_retry,
+                )
+            return factory
+
+        profiles = {
+            profile_id: (count, make_client_factory(transports[profile_id]), transports[profile_id][2])
+            for profile_id, count in capacities.items()
+        }
+        client_factory = next(iter(profiles.values()))[1]
 
         def env_factory() -> TeacherEnvClient:
             return TeacherEnvClient(
@@ -1217,7 +1282,7 @@ def run_from_configuration(
             workers=workers, client_factory=client_factory, env_factory=env_factory,
             stop=stop, first_cap=1 if smoke else 2,
             stop_after_pass="A" if smoke else None,
-            api_style=cfg["TEACHER_API_STYLE"],
+            api_style=first_style, api_profiles=profiles,
         )
         summary["elapsed_seconds"] = max(
             0.0,

@@ -12,7 +12,8 @@ constructs a `TeacherClient`. The main scheduler owns deterministic work
 selection and serialized acceptance/state updates. A long-lived ThreadPoolExecutor with completion-driven refill
 runs independent rollouts with separate remote sessions; the existing SQLite
 WAL ledger and atomic JSON writer provide durable attempts and accepted
-artifacts. The default worker count is 8 and is immutable on resume.
+artifacts. The legacy default worker count is 8; worker capacity is now a
+runtime throughput parameter and may change on resume (see runtime update below).
 Relay URL, key, and API style are runtime transport settings and may change
 between resume sessions; model `gpt-5.6-sol`, reasoning `high`, and all visible
 prompt/protocol semantics remain fixed. Each new attempt records the API style
@@ -131,3 +132,47 @@ Pass 边界、无 eligible work、quota reservations 已满或 global stop 时�
 Rolling 会增加实际平均 API 并发和请求速率；观察 429/retry、provider latency、
 terminal_unsuccessful 和 occupancy。若同时启动两个 scenario，每个上限 8，合计可能
 达到 16 条在途；本次没有新增跨进程 throttle，也没有变更 workers policy。
+
+## Runtime update: multiple API profiles
+
+Early formal collection used fixed workers=8. The user subsequently reclassified
+worker count and per-API-profile concurrency as runtime throughput parameters.
+The p3b-v1.1 YAML/hash and earlier immutable-workers notes remain historical
+records; formal resume no longer compares workers. All dataset identity,
+attempt budgets, acceptance and Pass A/B/C rules remain unchanged. Existing
+accepted data stay valid; resume the original run IDs without migration.
+
+`--api-workers 1:8,2:12` uses numbered `.env.teacher` entries
+`TEACHER_API_URL_1`, `TEACHER_API_KEY_1`, etc. `TEACHER_API_STYLE_1` is optional
+when the shared `TEACHER_API_STYLE` is present; an explicit numbered style wins.
+Model/reasoning remain shared `TEACHER_API_MODEL` / `TEACHER_REASONING_EFFORT`.
+Profile IDs are positive integers. `--api-workers` and `--workers` are mutually
+exclusive; without the former, unnumbered credentials and `--workers N` still
+work. The existing engineering guard remains 1–32 total workers per collector.
+
+One scenario still has one collector, ledger and central rolling scheduler.
+Each profile has a fixed capacity counter; a future releases only its own
+profile slot. One independent TeacherClient is bound to the entire trajectory.
+No per-step switching, provider failover, adaptive routing or cross-process
+key registry is introduced. The user assigns a key to only one scenario.
+Any existing fatal infrastructure stop still stops the whole collector.
+
+Start/finished lines show `[single][api=1]`, etc. This mapping is in memory only:
+raw/accepted trajectory schemas and collector.log event layout are unchanged.
+Crash-recovered historical completions may have no profile label. The existing
+scheduler_history records only profile IDs/capacities (no keys/URLs), and inspect
+and the final resume command retain the current runtime capacity arguments.
+The initial run manifest remains historical and is not rewritten.
+
+Configure credentials before running. Start the shared environment once with
+`bash scripts/teacher_env_up.sh` if needed; do not launch two collectors for the
+same scenario. Gracefully stop an existing scenario process before resuming it
+with new capacity. Example allocations (not optimal-concurrency decisions):
+
+```bash
+python3 scripts/collect_teacher.py --scenario single --api-workers 1:8,2:12 --run-id formal-20260908T105913Z-4eec9efd --resume
+python3 scripts/collect_teacher.py --scenario single_persona --api-workers 3:6 --run-id formal-20260909T035508Z-17af7151 --resume
+```
+
+This extension received static diff/syntax checks only, per user request;
+no tests, fake runs, environment startup or API calls were executed.

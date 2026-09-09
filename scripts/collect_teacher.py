@@ -19,7 +19,9 @@ def main() -> int:
     policy = load_collection_policy(DEFAULT_POLICY_PATH)
     parser = argparse.ArgumentParser(description="p3b-v1.1 formal teacher collector")
     parser.add_argument("--scenario", choices=("single", "single_persona"), required=True)
-    parser.add_argument("--workers", type=int, default=int(policy["concurrency"]["workers_default"]))
+    capacity = parser.add_mutually_exclusive_group()
+    capacity.add_argument("--api-workers", help="numbered API profiles, e.g. 1:8,2:12")
+    capacity.add_argument("--workers", type=int, default=int(policy["concurrency"]["workers_default"]))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--endpoint", default="http://127.0.0.1:5500")
@@ -34,7 +36,7 @@ def main() -> int:
             project_root=ROOT, scenario=args.scenario, policy_path=DEFAULT_POLICY_PATH,
             manifest_dir=args.manifest_dir, data_root=args.data_root,
             env_file=args.env_file, endpoint=args.endpoint, workers=args.workers,
-            resume=args.resume, run_id=args.run_id,
+            resume=args.resume, run_id=args.run_id, api_workers=args.api_workers,
         )
         return 0 if summary["status"] in {"complete", "quota_unmet"} else 2
     except Exception as exc:

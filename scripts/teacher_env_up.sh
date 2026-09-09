@@ -16,6 +16,8 @@ TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 TUNNEL_LOG="${STATE_DIR}/tunnel.log"
 REMOTE_OWNED_FILE="${STATE_DIR}/remote_service_owned"
 TUNNEL_CREATED=0
+SSH_OPTIONS=(-o ConnectTimeout=15 -o ConnectionAttempts=1
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
 mkdir -p "${STATE_DIR}"
 mkdir -p "${MANIFEST_CACHE}"
 
@@ -24,8 +26,17 @@ mkdir -p "${MANIFEST_CACHE}"
 for manifest_name in \
   train_single.json train_single_persona.json \
   sft_task_manifest_single.json sft_task_manifest_single_persona.json; do
-  scp -q "${REMOTE_HOST}:/root/data/shopsim/manifests/${manifest_name}" \
-    "${MANIFEST_CACHE}/${manifest_name}"
+  echo "Downloading manifest: ${manifest_name} (90s transfer limit)"
+  manifest_temp="$(mktemp "${MANIFEST_CACHE}/.${manifest_name}.XXXXXX")"
+  if python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" \
+      "${REMOTE_HOST}:/root/data/shopsim/manifests/${manifest_name}" "${manifest_temp}"; then
+    mv "${manifest_temp}" "${MANIFEST_CACHE}/${manifest_name}"
+    echo "Downloaded: ${manifest_name}"
+  else
+    rm -f "${manifest_temp}"
+    echo "Manifest transfer failed; previous cache retained. Environment setup stopped." >&2
+    exit 1
+  fi
 done
 
 tunnel_matches() {
@@ -57,9 +68,11 @@ tunnel_health() {
 # tracked file so a remote checkout that predates the current branch still
 # exposes the policy_context contract required by the profiler.  No catalog,
 # model, secret, or generated artifact is transferred.
-scp -q "${PROJECT_ROOT}/scripts/remote_teacher_env_service.py" \
+echo "Uploading environment service (90s transfer limit)"
+python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" "${PROJECT_ROOT}/scripts/remote_teacher_env_service.py" \
   "${REMOTE_HOST}:${REMOTE_PROJECT}/scripts/remote_teacher_env_service.py"
-scp -q "${PROJECT_ROOT}/src/rollout/protocol.py" \
+echo "Uploading action protocol (90s transfer limit)"
+python3 "${PROJECT_ROOT}/scripts/teacher_env_transfer.py" "${PROJECT_ROOT}/src/rollout/protocol.py" \
   "${REMOTE_HOST}:${REMOTE_PROJECT}/src/rollout/protocol.py"
 
 cleanup_failed_start() {
@@ -73,7 +86,8 @@ cleanup_failed_start() {
 }
 trap cleanup_failed_start ERR
 
-remote_result="$(ssh "${REMOTE_HOST}" bash -s -- "${REMOTE_PROJECT}" "${REMOTE_PORT}" \
+echo "Checking remote service / starting it if needed..."
+remote_result="$(ssh "${SSH_OPTIONS[@]}" "${REMOTE_HOST}" bash -s -- "${REMOTE_PROJECT}" "${REMOTE_PORT}" \
   "${EXPECTED_ENVIRONMENT_VERSION}" "${EXPECTED_POLICY_OBSERVATION_VERSION}" \
   "${EXPECTED_PROFILER_PROTOCOL_VERSION}" <<'REMOTE'
 set -euo pipefail

@@ -22,6 +22,8 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 import uuid
 
+import httpx
+
 from env.teacher_env_client import TeacherEnvClient, TeacherEnvError
 from rollout.collection_policy import has_deterministic_no_progress_loop
 from rollout.collection_policy import load_collection_policy
@@ -218,7 +220,10 @@ class CollectorLog:
             )
         if event == "PROGRESS":
             return f"[PROGRESS] pass={fields.get('pass', '-')} accepted={fields.get('accepted', 0)}"
-        if event in {"CTRL_C", "INFRA_STOP", "QUOTA_UNMET", "COMPLETE"}:
+        if event == "INFRA_STOP":
+            return (f"[INFRA_STOP] classification={fields.get('classification', '-')} "
+                    f"auto_resumable={fields.get('auto_resumable', False)}")
+        if event in {"CTRL_C", "QUOTA_UNMET", "COMPLETE"}:
             return f"[{event}] pass={fields.get('pass', '-')} accepted={fields.get('accepted', '-')}"
         return None
 
@@ -263,6 +268,29 @@ class AttemptResult:
 
 class FormalRunStop(RuntimeError):
     """Worker 已持久化 fatal/infra attempt，请求 global graceful stop。"""
+
+    def __init__(self, classification: str, *, auto_resumable: bool = False):
+        super().__init__(classification)
+        self.classification = classification
+        self.auto_resumable = auto_resumable
+
+
+def auto_resumable_error(exc: BaseException) -> bool:
+    """Explicit allowlist; an infrastructure label alone is not sufficient."""
+    network_errors = (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError)
+    if isinstance(exc, FormalRunStop):
+        return exc.auto_resumable
+    if isinstance(exc, TeacherClientError):
+        if isinstance(exc.__cause__, httpx.RequestError) and not isinstance(exc.__cause__, network_errors):
+            # The client also wraps UnsupportedProtocol/LocalProtocolError;
+            # those are configuration/program errors, not overnight retries.
+            return False
+        return exc.retryable and exc.kind in {"infrastructure", "provider_protocol_error"}
+    if isinstance(exc, TeacherEnvError):
+        # Identity/protocol mismatches also use kind=infrastructure. Only a
+        # typed network cause is recoverable; never retry those mismatches.
+        return isinstance(exc.__cause__, network_errors)
+    return False
 
 
 def initial_state(inputs: TaskInputs, *, target: int) -> dict[str, Any]:
@@ -599,6 +627,8 @@ def next_work(
 
 
 def _safe_error_class(exc: BaseException) -> str:
+    if isinstance(exc, FormalRunStop):
+        return exc.classification
     if isinstance(exc, TeacherClientError):
         return exc.kind
     if isinstance(exc, TeacherEnvError):
@@ -760,13 +790,13 @@ def execute_rollout(
             return finish("teacher_empty_response")
         else:
             finish("provider_config_error", reason=exc.kind)
-        raise FormalRunStop(exc.kind) from exc
+        raise FormalRunStop(exc.kind, auto_resumable=auto_resumable_error(exc)) from exc
     except TeacherEnvError as exc:
         record["failure_class"] = exc.kind
         if exc.kind == "invalid_action":
             return finish("invalid_action")
         finish("environment_fatal_error", reason=exc.kind)
-        raise FormalRunStop(exc.kind) from exc
+        raise FormalRunStop(exc.kind, auto_resumable=auto_resumable_error(exc)) from exc
     except FormalRunStop:
         raise
     except (ValueError, KeyError) as exc:
@@ -878,6 +908,8 @@ def run_engine(
 
     in_flight: dict[Future[AttemptResult], WorkItem] = {}
     future_profiles: dict[Future[AttemptResult], str] = {}
+    recoverable_failure_seen = False
+    permanent_failure_seen = False
 
     def persist_reservations() -> None:
         state["active_task_ids"] = [item.task_id for item in in_flight.values()]
@@ -932,8 +964,12 @@ def run_engine(
                             stop.set()
                         except BaseException as exc:
                             stop.set()
+                            recoverable = auto_resumable_error(exc)
+                            recoverable_failure_seen |= recoverable
+                            permanent_failure_seen |= not recoverable
                             state["last_error"] = _safe_error_class(exc)
-                            logger.event("INFRA_STOP", classification=_safe_error_class(exc))
+                            logger.event("INFRA_STOP", classification=_safe_error_class(exc),
+                                         auto_resumable=recoverable)
                     persist_reservations()
                     reconcile_attempts(ledger, state, logger)
                     for task_id in list(logger.task_api_profiles):
@@ -963,7 +999,14 @@ def run_engine(
         logger.event("COMPLETE", pass_name=state["current_pass"], accepted=ledger.accepted_count())
     elif state["status"] == "quota_unmet":
         logger.event("QUOTA_UNMET", pass_name=state["current_pass"], accepted=ledger.accepted_count())
-    return summary_from_state(ledger, state)
+    summary = summary_from_state(ledger, state)
+    # Eligibility belongs to this invocation, never to historical persisted
+    # errors. One permanent failure vetoes every transient sibling failure.
+    summary["auto_resume_eligible"] = (
+        state["status"] == "stopped" and recoverable_failure_seen
+        and not permanent_failure_seen
+    )
+    return summary
 
 
 def git_commit(root: Path) -> str:
@@ -1221,12 +1264,16 @@ def run_from_configuration(
     )
     stop = GlobalStop()
     old_handler = signal.getsignal(signal.SIGINT)
+    user_interrupted = False
 
     def handle_sigint(_signum: int, _frame: Any) -> None:
+        nonlocal user_interrupted
+        user_interrupted = True
         stop.set()
         logger.event("CTRL_C")
 
     signal.signal(signal.SIGINT, handle_sigint)
+    summary = None
     try:
         state = load_state(ledger)
         if state is None:
@@ -1300,9 +1347,14 @@ def run_from_configuration(
             (datetime.now(timezone.utc) - datetime.fromisoformat(state["started_at"])).total_seconds(),
         )
         summary["resume_command"] = resume_command if summary["status"] == "stopped" else None
+        if user_interrupted:
+            summary["auto_resume_eligible"] = False
         write_summary(ledger.paths.root / "summary.json", summary)
         print_summary(summary, resume_command=resume_command)
         return summary
     finally:
         signal.signal(signal.SIGINT, old_handler)
         ledger.close()
+        # Also honor Ctrl+C arriving during summary output or final cleanup.
+        if user_interrupted and summary is not None:
+            summary["auto_resume_eligible"] = False

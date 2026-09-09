@@ -125,7 +125,7 @@ version、**实际执行的 git commit**、UTC resume 时间、policy、workers�
 静态 gate 对两个真实 manifest/SQLite 的临时副本执行 resume 配置路径，remote 用
 已保存 prompt/hash 与 fingerprint 的 stub，TeacherClient 被禁止构造，engine 不执行。
 两种 API style 均通过；实时 tunnel/environment 可用性仍由用户启动时 preflight 检查。
-Relay URL/key/style hotfix 保留；没有 automatic resume，infrastructure stop 后人工恢复。
+Relay URL/key/style hotfix 保留；当时没有 automatic resume，infrastructure stop 后人工恢复。
 
 正常输出应为初始最多 8 条 start，随后某条 finished 后尽快出现新的 start；
 Pass 边界、无 eligible work、quota reservations 已满或 global stop 时不补位。
@@ -181,3 +181,40 @@ python3 scripts/collect_teacher.py --scenario single_persona --api-workers 3:6 -
 
 This extension received static diff/syntax checks only, per user request;
 no tests, fake runs, environment startup or API calls were executed.
+
+## Optional automatic resume
+
+Add `--auto-resume` to the existing collector command to resume after a
+recoverable infrastructure stop. The default remains manual resume. Workers
+first drain, attempts/state persist, sessions clean up and SQLite closes;
+then the CLI waits a fixed **120 seconds** and resumes the **same run ID**,
+retaining all CLI arguments, including API profile capacities. Each resume
+performs the existing preflight and records the existing scheduler history.
+There is no duration limit or increasing delay; repeated transient failures
+can keep retrying until the user stops the process.
+
+Eligible failures are exhausted teacher network/transient HTTP retries
+(408/429/500/502/503/504), retryable teacher response protocol errors, and
+typed environment network/timeout errors. During automatic recovery, an
+environment network failure in preflight also waits 120 seconds and retries.
+Initial preflight errors exit normally. No environment service or tunnel is
+automatically restarted.
+
+Authentication/config errors, returned-model or environment/session identity
+mismatches, other environment errors, storage/program errors, `complete`, and
+`quota_unmet` do **not** restart. A permanent failure in any profile vetoes
+automatic recovery of the whole collector. Ctrl+C during collection performs
+the normal graceful stop without restarting; Ctrl+C during the wait exits.
+`[INFRA_STOP] auto_resumable=True` describes that individual error, not an
+override of another fatal error or Ctrl+C. `[AUTO_RESUME]` announces the wait.
+
+Keep the current profile allocation and append the flag, for example:
+
+```bash
+python3 scripts/collect_teacher.py --scenario single --api-workers 1:8,2:12 --run-id formal-20260908T105913Z-4eec9efd --resume --auto-resume
+```
+
+Gracefully stop the existing collector for that scenario before launching this
+command. The terminal, Mac (awake, with network), SSH tunnel and remote service
+must remain available overnight. Existing accepted data and trajectory schemas
+are unchanged. This extension received static checks only; no tests or API runs.

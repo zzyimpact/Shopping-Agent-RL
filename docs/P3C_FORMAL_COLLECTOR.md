@@ -96,6 +96,9 @@ main-thread acceptance 不处理仍在清理的 candidate。Pass C 每条在途 
 prompt/reward 和 `p3b-v1.1` policy/hash 保持原值。Completion timing 不保证旧/新
 scheduler 的未来样本逐条一致，但 reserve 仍按当前 durable state 确定性分配。
 
+Implementation commit: `d9fade8320a8632e7e9b51a32f4a3c28db302dd2` (`fix: use rolling teacher collection scheduler`).
+本轮定向 no-paid regression：42 passed（formal collector、concurrency、storage、runtime、collection policy）。
+
 ### Existing-run boundary / provenance
 
 两个原 run 保留；本次静态检查时都是 stopped / Pass A / workers=8，无 active task：

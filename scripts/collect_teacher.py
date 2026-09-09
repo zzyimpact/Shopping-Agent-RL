@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,45 +29,19 @@ def main() -> int:
     args = parser.parse_args()
     if args.run_id and not args.resume:
         parser.error("--run-id 只能与 --resume 一起使用")
-    resume = args.resume
-    run_id = args.run_id
-    while True:
-        try:
-            summary = run_from_configuration(
-                project_root=ROOT, scenario=args.scenario, policy_path=DEFAULT_POLICY_PATH,
-                manifest_dir=args.manifest_dir, data_root=args.data_root,
-                env_file=args.env_file, endpoint=args.endpoint, workers=args.workers,
-                resume=resume, run_id=run_id,
-            )
-            status = summary["status"]
-            if status in {"complete", "quota_unmet"}:
-                return 0
-            # An infrastructure stop has already flushed the run state and
-            # printed its exact resume command. Retry that same immutable run.
-            if status == "stopped" and summary.get("last_error"):
-                run_id = str(summary["run_id"])
-                resume = True
-                print("Infrastructure stop detected; automatic resume in 15 seconds...", flush=True)
-                time.sleep(15)
-                continue
-            return 2
-        except KeyboardInterrupt:
-            print("Automatic resume cancelled.", file=sys.stderr)
-            return 130
-        except Exception as exc:
-            # Once explicitly resuming a known run, transient environment/API
-            # disconnects are retried without changing its immutable config.
-            if resume and run_id:
-                print(
-                    f"Resume attempt failed ({type(exc).__name__}); automatic resume in 15 seconds...",
-                    file=sys.stderr, flush=True,
-                )
-                time.sleep(15)
-                continue
-            # TeacherClient/Env errors intentionally contain no provider body,
-            # request headers, key, or URL. Never dump arbitrary object repr here.
-            print(f"Formal collection preflight/run failed: {type(exc).__name__}: {str(exc)[:300]}", file=sys.stderr)
-            return 2
+    try:
+        summary = run_from_configuration(
+            project_root=ROOT, scenario=args.scenario, policy_path=DEFAULT_POLICY_PATH,
+            manifest_dir=args.manifest_dir, data_root=args.data_root,
+            env_file=args.env_file, endpoint=args.endpoint, workers=args.workers,
+            resume=args.resume, run_id=args.run_id,
+        )
+        return 0 if summary["status"] in {"complete", "quota_unmet"} else 2
+    except Exception as exc:
+        # TeacherClient/Env errors intentionally contain no provider body,
+        # request headers, key, or URL. Never dump arbitrary object repr here.
+        print(f"Formal collection preflight/run failed: {type(exc).__name__}: {str(exc)[:300]}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

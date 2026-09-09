@@ -13,6 +13,10 @@ selection and serialized acceptance/state updates. Existing bounded workers
 run independent rollouts with separate remote sessions; the existing SQLite
 WAL ledger and atomic JSON writer provide durable attempts and accepted
 artifacts. The default worker count is 8 and is immutable on resume.
+Relay URL, key, and API style are runtime transport settings and may change
+between resume sessions; model `gpt-5.6-sol`, reasoning `high`, and all visible
+prompt/protocol semantics remain fixed. Each new attempt records the API style
+actually used for provenance.
 
 ## Passes
 

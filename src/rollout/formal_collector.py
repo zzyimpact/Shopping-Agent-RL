@@ -36,7 +36,7 @@ from rollout.teacher_client import TeacherClient, TeacherClientError, TeacherRes
 
 FORMAL_EXTRA_IMMUTABLE = (
     "purpose", "policy_version", "policy_hash", "workers", "seed",
-    "sanitized_request_config_hash", "primary_manifest_hash", "train_manifest_hash",
+    "primary_manifest_hash", "train_manifest_hash",
     "policy_observation_version", "profiler_protocol_version", "max_action_steps",
     "environment_fingerprint", "selected_primary_hash",
 )
@@ -810,7 +810,7 @@ def run_engine(
     policy: Mapping[str, Any], logger: CollectorLog, workers: int,
     client_factory: Callable[[Callable[..., None]], Any], env_factory: Callable[[], Any],
     stop: GlobalStop | None = None, first_cap: int = 2,
-    stop_after_pass: str | None = None,
+    stop_after_pass: str | None = None, api_style: str | None = None,
 ) -> dict[str, Any]:
     """运行 A/B/C；测试与 paid smoke 均调用这一入口。"""
     stop = stop or GlobalStop()
@@ -818,7 +818,8 @@ def run_engine(
     reconcile_attempts(ledger, state, logger)
     max_steps = int(policy["protocol"]["max_action_steps"])
     sanitized = {
-        "model": policy["teacher"]["model"], "api_style": policy["teacher"]["api_style"],
+        "model": policy["teacher"]["model"],
+        "api_style": api_style or policy["teacher"]["api_style"],
         "reasoning_effort": policy["teacher"]["reasoning_effort"],
         "request_semantics": policy["teacher"]["request_semantics"],
     }
@@ -972,12 +973,13 @@ def run_from_configuration(
         raise ValueError(".env.teacher 缺少: " + ", ".join(missing))
     expected_cfg = {
         "TEACHER_API_MODEL": policy["teacher"]["model"],
-        "TEACHER_API_STYLE": policy["teacher"]["api_style"],
         "TEACHER_REASONING_EFFORT": policy["teacher"]["reasoning_effort"],
     }
     mismatched = [key for key, value in expected_cfg.items() if cfg.get(key) != value]
     if mismatched:
         raise ValueError("teacher config 与 p3b-v1.1 不一致: " + ", ".join(mismatched))
+    if cfg["TEACHER_API_STYLE"] not in {"chat_completions", "responses"}:
+        raise ValueError("TEACHER_API_STYLE 必须是 chat_completions 或 responses")
 
     inputs = load_task_inputs(
         manifest_dir, policy, scenario, selected_primary_ids=selected_primary_ids,
@@ -1022,7 +1024,7 @@ def run_from_configuration(
     finally:
         write_probe.unlink(missing_ok=True)
     sanitized_request = {
-        "model": policy["teacher"]["model"], "api_style": policy["teacher"]["api_style"],
+        "model": policy["teacher"]["model"],
         "reasoning_effort": policy["teacher"]["reasoning_effort"],
         "request_semantics": policy["teacher"]["request_semantics"],
         "omitted": list(policy["teacher"]["explicitly_omitted_request_fields"]),
@@ -1034,7 +1036,6 @@ def run_from_configuration(
         "policy_version": policy["identity"]["policy_version"],
         "policy_hash": policy["identity"]["policy_hash"],
         "teacher_model": policy["teacher"]["model"],
-        "api_style": policy["teacher"]["api_style"],
         "reasoning_effort": policy["teacher"]["reasoning_effort"],
         "workers": workers, "seed": policy["identity"]["seed"],
         "primary_manifest_hash": inputs.primary_manifest_hash,
@@ -1052,9 +1053,23 @@ def run_from_configuration(
         if run_id is not None:
             raise ValueError("--run-id 只能与 --resume 一起使用")
         resolved_run_id = new_run_id(smoke=smoke)
+    persisted_transport = None
+    if resume:
+        persisted_transport = json.loads(
+            (data_root / scenario / resolved_run_id / "run_manifest.json").read_text(encoding="utf-8")
+        )
     manifest = {
         **expected_resume, "run_id": resolved_run_id,
-        "sanitized_request_config_hash": canonical_hash(sanitized_request),
+        # Keep historical manifest provenance untouched while allowing the
+        # current relay transport to change between resume sessions.
+        "api_style": (
+            persisted_transport.get("api_style", cfg["TEACHER_API_STYLE"])
+            if persisted_transport else cfg["TEACHER_API_STYLE"]
+        ),
+        "sanitized_request_config_hash": (
+            persisted_transport.get("sanitized_request_config_hash", canonical_hash(sanitized_request))
+            if persisted_transport else canonical_hash(sanitized_request)
+        ),
         "collection_config_hash": str(policy["identity"]["policy_hash"]),
         "shopsim_source_fingerprint": health.get("source_fingerprint", "unknown"),
         "environment_fingerprint": health.get("source_fingerprint", "unknown"),
@@ -1120,6 +1135,7 @@ def run_from_configuration(
             workers=workers, client_factory=client_factory, env_factory=env_factory,
             stop=stop, first_cap=1 if smoke else 2,
             stop_after_pass="A" if smoke else None,
+            api_style=cfg["TEACHER_API_STYLE"],
         )
         summary["elapsed_seconds"] = max(
             0.0,

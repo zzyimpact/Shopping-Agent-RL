@@ -833,14 +833,18 @@ def run_engine(
     client_factory: Callable[[Callable[..., None]], Any], env_factory: Callable[[], Any],
     stop: GlobalStop | None = None, first_cap: int = 2,
     stop_after_pass: str | None = None, api_style: str | None = None,
-    api_profiles: Mapping[str, tuple[int, Callable[..., Any], str]] | None = None,
+    api_profiles: Mapping[str, tuple[int, Callable[..., Any], Mapping[str, str]]] | None = None,
 ) -> dict[str, Any]:
     """运行 A/B/C；测试与 paid smoke 均调用这一入口。"""
     stop = stop or GlobalStop()
     if not isinstance(workers, int) or not 1 <= workers <= MAX_WORKERS:
         raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
     profiles = dict(api_profiles) if api_profiles is not None else {
-        "legacy": (workers, client_factory, api_style or policy["teacher"]["api_style"])
+        "legacy": (workers, client_factory, {
+            "model": policy["teacher"]["model"],
+            "api_style": api_style or policy["teacher"]["api_style"],
+            "reasoning_effort": policy["teacher"]["reasoning_effort"],
+        })
     }
     if (not profiles or any(capacity < 1 for capacity, _, _ in profiles.values())
             or sum(capacity for capacity, _, _ in profiles.values()) != workers):
@@ -864,9 +868,9 @@ def run_engine(
             stop.check_before_external_call()
             return execute_rollout(
                 item, stop, ledger=ledger, scenario=str(ledger.manifest["scenario"]),
-                expected_model=str(policy["teacher"]["model"]), max_action_steps=max_steps,
+                expected_model=profiles[profile_id][2]["model"], max_action_steps=max_steps,
                 logger=logger, client_factory=profiles[profile_id][1], env_factory=env_factory,
-                sanitized_teacher_config={**sanitized, "api_style": profiles[profile_id][2]},
+                sanitized_teacher_config={**sanitized, **profiles[profile_id][2]},
             )
         except BaseException:
             stop.set()  # Signal siblings immediately, not when main consumes this future.
@@ -1070,28 +1074,31 @@ def run_from_configuration(
     if not env_file.is_file():
         raise FileNotFoundError(f"缺少 teacher env file: {env_file}")
     cfg = load_env_file(str(env_file))
-    required = ("TEACHER_API_MODEL", "TEACHER_REASONING_EFFORT")
-    missing = [key for key in required if not cfg.get(key)]
-    if missing:
-        raise ValueError(".env.teacher 缺少: " + ", ".join(missing))
-    expected_cfg = {
-        "TEACHER_API_MODEL": policy["teacher"]["model"],
-        "TEACHER_REASONING_EFFORT": policy["teacher"]["reasoning_effort"],
-    }
-    mismatched = [key for key, value in expected_cfg.items() if cfg.get(key) != value]
-    if mismatched:
-        raise ValueError("teacher config 与 p3b-v1.1 不一致: " + ", ".join(mismatched))
-    # Credentials stay inside client factory closures; never enter run/trajectory metadata.
+    # Each numbered profile is complete; no shared-value fallback.
     transports = {}
     for profile_id in capacities:
         suffix = "" if profile_id == "legacy" else f"_{profile_id}"
-        url, key = cfg.get(f"TEACHER_API_URL{suffix}"), cfg.get(f"TEACHER_API_KEY{suffix}")
-        style = cfg.get(f"TEACHER_API_STYLE{suffix}", cfg.get("TEACHER_API_STYLE", ""))
-        if not url or not key:
-            raise ValueError(f"缺少 TEACHER_API_URL{suffix} / TEACHER_API_KEY{suffix}")
+        names = [name + suffix for name in (
+            "TEACHER_API_URL", "TEACHER_API_KEY", "TEACHER_API_STYLE",
+            "TEACHER_API_MODEL", "TEACHER_REASONING_EFFORT",
+        )]
+        missing = [name for name in names if not cfg.get(name)]
+        if missing:
+            raise ValueError(".env.teacher 缺少: " + ", ".join(missing))
+        url, key, style, model, effort = (cfg[name] for name in names)
+        if profile_id == "legacy":
+            # Preserve the original single-key preflight; numbered profiles are
+            # user-managed relay configurations, not a cross-provider validator.
+            expected_cfg = {
+                "TEACHER_API_MODEL": policy["teacher"]["model"],
+                "TEACHER_REASONING_EFFORT": policy["teacher"]["reasoning_effort"],
+            }
+            mismatched = [name for name, value in expected_cfg.items() if cfg[name] != value]
+            if mismatched:
+                raise ValueError("teacher config 与 p3b-v1.1 不一致: " + ", ".join(mismatched))
         if style not in {"chat_completions", "responses"}:
             raise ValueError(f"TEACHER_API_STYLE{suffix} 必须是 chat_completions 或 responses")
-        transports[profile_id] = (url, key, style)
+        transports[profile_id] = (url, key, style, model, effort)
     first_style = next(iter(transports.values()))[2]
 
     inputs = load_task_inputs(
@@ -1255,18 +1262,22 @@ def run_from_configuration(
                      commit=history[-1]["git_commit"],
                      attempt_rowid_boundary=history[-1]["attempt_rowid_boundary"])
 
-        def make_client_factory(transport: tuple[str, str, str]) -> Callable[..., TeacherClient]:
-            url, key, style = transport
+        def make_client_factory(transport: tuple[str, str, str, str, str]) -> Callable[..., TeacherClient]:
+            url, key, style, model, effort = transport
 
             def factory(on_retry: Callable[..., None]) -> TeacherClient:
                 return TeacherClient(
-                    api_url=url, api_key=key, model=cfg["TEACHER_API_MODEL"], api_style=style,
-                    reasoning_effort=cfg["TEACHER_REASONING_EFFORT"], on_retry=on_retry,
+                    api_url=url, api_key=key, model=model, api_style=style,
+                    reasoning_effort=effort, on_retry=on_retry,
                 )
             return factory
 
         profiles = {
-            profile_id: (count, make_client_factory(transports[profile_id]), transports[profile_id][2])
+            profile_id: (count, make_client_factory(transports[profile_id]), {
+                "api_style": transports[profile_id][2],
+                "model": transports[profile_id][3],
+                "reasoning_effort": transports[profile_id][4],
+            })
             for profile_id, count in capacities.items()
         }
         client_factory = next(iter(profiles.values()))[1]

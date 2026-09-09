@@ -143,9 +143,14 @@ attempt budgets, acceptance and Pass A/B/C rules remain unchanged. Existing
 accepted data stay valid; resume the original run IDs without migration.
 
 `--api-workers 1:8,2:12` uses numbered `.env.teacher` entries
-`TEACHER_API_URL_1`, `TEACHER_API_KEY_1`, etc. `TEACHER_API_STYLE_1` is optional
-when the shared `TEACHER_API_STYLE` is present; an explicit numbered style wins.
-Model/reasoning remain shared `TEACHER_API_MODEL` / `TEACHER_REASONING_EFFORT`.
+`TEACHER_API_URL_1`, `TEACHER_API_KEY_1`, `TEACHER_API_MODEL_1`,
+`TEACHER_REASONING_EFFORT_1`, `TEACHER_API_STYLE_1` (and similarly for 2, 3, ...).
+Each selected profile requires all five fields, without unnumbered fallback.
+Client requests and existing sanitized teacher_config fields use that profile's
+actual model/style/effort. The existing returned-model check compares against
+that profile's configured model name; no cross-profile consistency check is
+added. The user ensures relay model aliases refer to the intended teacher.
+The historical formal policy/run identity is unchanged; no artifact fields are added.
 Profile IDs are positive integers. `--api-workers` and `--workers` are mutually
 exclusive; without the former, unnumbered credentials and `--workers N` still
 work. The existing engineering guard remains 1–32 total workers per collector.

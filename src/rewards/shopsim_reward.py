@@ -9,6 +9,43 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
+METRIC_KEYS = (
+    "r_loose", "r_strict", "r_succ", "r_finish", "r_category",
+    "r_attribute", "r_option", "r_price",
+)
+
+
+def combine_reward(metrics: Mapping[str, Any], *, alpha: float) -> float:
+    """Combine already-computed strict/loose metrics without rescoring an episode."""
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError("alpha 必须位于 [0, 1]")
+    return alpha * float(metrics.get("r_strict", 0.0) or 0.0) + (1.0 - alpha) * float(
+        metrics.get("r_loose", 0.0) or 0.0
+    )
+
+
+def metrics_from_environment(payload: Mapping[str, Any], *, alpha: float = 1.0) -> dict[str, float]:
+    """Normalize the remote upstream scorer's terminal payload (profiler semantics).
+
+    No new scoring: loose is returned by ShopSimulator; strict is the same
+    product of the four upstream components used by ``score_episode``.
+    """
+    if not (payload.get("done") or payload.get("over")):
+        return {key: 0.0 for key in (*METRIC_KEYS, "r_alpha")}
+    detail = payload.get("reward_detail") or {}
+    category = float(detail.get("r_category", detail.get("r_type", 0.0)) or 0.0)
+    attribute = float(detail.get("r_attribute", detail.get("r_att", 0.0)) or 0.0)
+    option = float(detail.get("r_option", 0.0) or 0.0)
+    price = float(detail.get("r_price", 0.0) or 0.0)
+    strict = category * attribute * option * price
+    metrics = dict(zip(METRIC_KEYS, (
+        float(payload.get("reward", 0.0) or 0.0), strict, float(strict == 1.0),
+        1.0, category, attribute, option, price,
+    )))
+    metrics["r_alpha"] = combine_reward(metrics, alpha=alpha)
+    return metrics
+
+
 def _upstream():
     from web_agent_site.engine.goal import get_reward
 

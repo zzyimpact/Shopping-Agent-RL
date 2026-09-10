@@ -1,0 +1,135 @@
+"""One local-policy episode; shared by evaluation and future online GRPO."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import time
+from typing import Any, Callable, Mapping
+import warnings
+
+from env.teacher_env_client import TeacherEnvError
+from rewards.shopsim_reward import METRIC_KEYS, metrics_from_environment
+from rollout.prompt import (
+    append_turn, assert_no_evaluator_leakage, build_initial_messages, policy_context_from_reset,
+)
+from rollout.protocol import trace_visible_action
+
+
+@dataclass
+class RolloutResult:
+    task_id: str
+    scenario: str
+    status: str = "max_steps"
+    messages: list[dict[str, str]] = field(default_factory=list)
+    visible_responses: list[str] = field(default_factory=list)
+    actions: list[str] = field(default_factory=list)
+    reward_metrics: dict[str, float] = field(default_factory=dict)
+    steps: int = 0
+    invalid_action_count: int = 0
+    malformed_action_count: int = 0
+    generation_count: int = 0
+    input_tokens: int | None = None
+    generated_tokens: int | None = None
+    generation_time_s: float = 0.0
+    wall_time_s: float = 0.0
+
+    @property
+    def reward(self) -> float:
+        return self.reward_metrics["r_alpha"]
+
+
+def _payload(result: Any) -> Mapping[str, Any]:
+    return result.payload if hasattr(result, "payload") else result
+
+
+def _observation(payload: Mapping[str, Any]) -> str:
+    # Same explicit policy-visible fields used by the teacher profiler.
+    for key in ("policy_observation", "user_message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise ValueError("environment missing policy_observation/user_message")
+
+
+class AgentRollout:
+    """Fresh environment session per trajectory, with no teacher storage/runtime."""
+
+    def __init__(self, *, policy: Any, env_factory: Callable[[], Any], scenario: str,
+                 reward_alpha: float = 1.0, max_action_steps: int = 30) -> None:
+        if scenario not in {"single", "single_persona"}:
+            raise ValueError("unsupported scenario")
+        if not 0.0 <= reward_alpha <= 1.0:
+            raise ValueError("reward_alpha must be in [0, 1]")
+        if max_action_steps < 1:
+            raise ValueError("max_action_steps must be positive")
+        self.policy, self.env_factory, self.scenario = policy, env_factory, scenario
+        self.reward_alpha, self.max_action_steps = reward_alpha, max_action_steps
+
+    def run(self, task_id: str) -> RolloutResult:
+        started = time.monotonic()
+        episode = RolloutResult(str(task_id), self.scenario)
+        episode.reward_metrics = {key: 0.0 for key in (*METRIC_KEYS, "r_alpha")}
+        env = self.env_factory()
+        session_id = None
+        try:
+            reset = _payload(env.reset(self.scenario, str(task_id)))
+            session_id = reset.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                raise ValueError("environment reset missing session_id")
+            context = policy_context_from_reset(reset, self.scenario)
+            episode.messages = build_initial_messages(context, _observation(reset))
+            assert_no_evaluator_leakage(episode.messages)
+            for _ in range(self.max_action_steps):
+                tick = time.monotonic()
+                response = self.policy.generate(episode.messages)
+                episode.generation_time_s += time.monotonic() - tick
+                episode.generation_count += 1
+                usage = getattr(self.policy, "last_usage", {})
+                for name in ("input_tokens", "generated_tokens"):
+                    if usage.get(name) is not None:
+                        setattr(episode, name, (getattr(episode, name) or 0) + int(usage[name]))
+                if not isinstance(response, str):
+                    raise TypeError("policy.generate must return assistant text")
+                episode.visible_responses.append(response)
+                trace = trace_visible_action(response)
+                if not trace["canonical"]:
+                    episode.messages.append({"role": "assistant", "content": response})
+                    episode.status = "malformed_action"
+                    episode.malformed_action_count += 1
+                    break
+                try:
+                    payload = _payload(env.step(
+                        session_id, response, expected_task_id=str(task_id),
+                        expected_scenario=self.scenario,
+                    ))
+                except TeacherEnvError as exc:
+                    if exc.kind != "invalid_action":
+                        raise  # Infrastructure failures are not scored as policy failures.
+                    episode.messages.append({"role": "assistant", "content": response})
+                    episode.status = "invalid_action"
+                    episode.invalid_action_count += 1
+                    break
+                episode.actions.append(str(payload.get("action", trace["extracted_action"])))
+                episode.steps += 1
+                episode.messages = append_turn(episode.messages, response, _observation(payload))
+                assert_no_evaluator_leakage(episode.messages)
+                if payload.get("action_valid") is False:
+                    episode.status = "invalid_action"
+                    episode.invalid_action_count += 1
+                    break
+                if payload.get("done") or payload.get("over"):
+                    episode.reward_metrics = metrics_from_environment(payload, alpha=self.reward_alpha)
+                    episode.status = ("success" if episode.reward_metrics["r_succ"] == 1.0
+                                      else "terminal_unsuccessful")
+                    break
+            return episode
+        finally:
+            try:
+                if session_id:
+                    try:
+                        env.release(session_id)
+                    except Exception:
+                        warnings.warn("ShopEnv session release failed", RuntimeWarning)
+            finally:
+                env.close()
+                episode.wall_time_s = time.monotonic() - started

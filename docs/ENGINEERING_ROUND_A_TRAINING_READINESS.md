@@ -248,8 +248,11 @@ versions 和 checkpoint lineage。teacher raw/accepted schema 不改、不迁移
 
 ## 11. Round B Plan
 
-1. 在 teacher collection 完成并冻结 selected accepted manifest/hash 后，实现
-   `policy.py` 与 `rollout.py`，先只支持 Base/PEFT `generate(messages)`。
+Round B 与 teacher collection 并行：policy/rollout/evaluator/formatter/SFTTrainer 的
+代码实现不依赖 collection 完成。只有最终 accepted 数量、selected manifest/hash、
+final SFT JSONL freeze 和正式 SFT training 需要等最终数据冻结。
+
+1. 实现 `policy.py` 与 `rollout.py`，先只支持 Base/PEFT `generate(messages)`。
 2. 实现 `sft_data.py`：只消费 policy-visible messages；拒绝
    `evaluator_only`、goal、reward metadata；不按 6000 写死。
 3. 实现统一 evaluator 与 `eval_128_single` / `eval_128_single_persona` 输出，

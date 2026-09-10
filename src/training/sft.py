@@ -49,7 +49,7 @@ def _training_imports():
 
 
 def build_sft_trainer(*, model: Any, tokenizer: Any, train_dataset: Any,
-                      config: SFTConfigSpec) -> Any:
+                      config: SFTConfigSpec, use_cpu: bool = False) -> Any:
     """Caller supplies pretokenized input_ids/labels from sft_data.py."""
     config.validate()
     if not len(train_dataset):
@@ -73,7 +73,8 @@ def build_sft_trainer(*, model: Any, tokenizer: Any, train_dataset: Any,
         num_train_epochs=config.num_train_epochs, learning_rate=config.learning_rate,
         per_device_train_batch_size=config.per_device_train_batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        bf16=True, fp16=False, seed=config.seed, data_seed=config.seed,
+        use_cpu=use_cpu, bf16=not use_cpu, fp16=False, seed=config.seed, data_seed=config.seed,
+        dataloader_pin_memory=not use_cpu,
         gradient_checkpointing=config.gradient_checkpointing,
         # Labels already encode assistant-only loss. Do not invoke a second template/mask.
         assistant_only_loss=False, completion_only_loss=False,

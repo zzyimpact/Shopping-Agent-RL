@@ -211,7 +211,7 @@ def initialize_grpo_model(model_path, *, init: str, adapter_path=None):
     return model
 
 
-def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory):
+def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory, use_cpu: bool = False):
     from importlib.metadata import version
     if version("trl") != "1.12.0":
         raise RuntimeError("custom rollout glue requires pinned trl==1.12.0")
@@ -236,7 +236,8 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory):
         temperature=sampling.temperature, top_p=sampling.top_p, top_k=0,
         max_completion_length=sampling.max_context_tokens, mask_truncated_completions=False,
         use_vllm=False, use_liger_kernel=False, disable_dropout=True,
-        bf16=True, fp16=False, gradient_checkpointing=True,
+        use_cpu=use_cpu, bf16=not use_cpu, fp16=False, gradient_checkpointing=True,
+        dataloader_pin_memory=not use_cpu,
         report_to="none", log_completions=False, save_only_model=False, eval_strategy="no",
         save_strategy="steps", save_steps=spec.save_steps, logging_steps=spec.logging_steps,
         optim="adamw_torch", warmup_ratio=0.0, epsilon=0.2, max_grad_norm=1.0,
@@ -267,12 +268,14 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory):
             trainer._shop_rollout_seconds = 0.0
 
         def on_step_end(self, args, state, control, **kwargs):
-            import torch
-            append_metrics(output / "metrics.jsonl", {
+            metrics = {
                 "event": "update", "step": state.global_step,
                 "update_wall_s": max(0.0, time.monotonic() - self.started - trainer._shop_rollout_seconds),
-                "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
-            })
+            }
+            if args.device.type == "cuda":
+                import torch
+                metrics["gpu_peak_allocated_bytes"] = torch.cuda.max_memory_allocated()
+            append_metrics(output / "metrics.jsonl", metrics)
 
         def on_log(self, args, state, control, logs=None, **kwargs):
             append_metrics(output / "metrics.jsonl", {"event": "trl", "step": state.global_step, **(logs or {})})

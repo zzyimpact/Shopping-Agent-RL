@@ -67,7 +67,7 @@ def main(argv=None) -> int:
     tokenizer_path = config["tokenizer_path"] or config["model_path"]
     inputs = {"selection_manifest_sha256": sha256_file(config["selection_manifest"]),
               "train_task_manifest_sha256": sha256_file(config["train_task_manifest"]),
-              "selected_count": len(examples), "sft_projection": "visible-messages-qwen-offsets-v1",
+              "selected_count": len(examples), "sft_projection": "visible-messages-qwen-offsets-assistant-eos-v2",
               "selected_content_sha256": json_hash([(e.accepted_id, e.task_id, e.source_sha256) for e in examples]),
               **model_metadata(config["model_path"], tokenizer_path)}
     root = prepare_run(config["output_dir"], config=config, inputs=inputs, resume_from_checkpoint=resume)

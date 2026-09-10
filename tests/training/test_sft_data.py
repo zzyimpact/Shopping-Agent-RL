@@ -102,9 +102,18 @@ def test_labels_train_assistant_content_and_eos_only():
     expected = [token for m in messages if m["role"] == "assistant"
                 for token in tokenizer(m["content"] + "<|im_end|>")["input_ids"]]
     assert trained == expected
-    assert row["labels"][0] == -100  # Includes headers, all observations and trailing terminal user.
+    assert row["labels"][0] == -100  # Includes headers and intermediate observations.
+    assert row["input_ids"][-1] == tokenizer.convert_tokens_to_ids("<|im_end|>")
+    assert row["labels"][-1] != -100
+    assert len(row["input_ids"]) < len(tokenizer.apply_chat_template(messages, tokenize=True))
+    assert messages[-1]["content"] == "购买完成"  # Source/review projection is untouched.
     with pytest.raises(ValueError, match="silent truncation"):
         tokenize_with_assistant_mask(tokenizer, messages, max_length=5)
+
+
+def test_no_assistant_loss_tokens_are_rejected_explicitly():
+    with pytest.raises(ValueError, match="no assistant loss tokens"):
+        tokenize_with_assistant_mask(FakeQwenTokenizer(), [{"role": "user", "content": "no answer"}])
 
 
 def test_changed_template_fails_instead_of_guessing_a_mask():

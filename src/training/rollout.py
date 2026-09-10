@@ -13,6 +13,8 @@ from rollout.prompt import (
     append_turn, assert_no_evaluator_leakage, build_initial_messages, policy_context_from_reset,
 )
 from rollout.protocol import trace_visible_action
+from training.policy import GenerationConfig
+from training.token_trace import TokenTrace
 
 
 @dataclass
@@ -32,6 +34,7 @@ class RolloutResult:
     generated_tokens: int | None = None
     generation_time_s: float = 0.0
     wall_time_s: float = 0.0
+    token_trace: TokenTrace | None = None
 
     @property
     def reward(self) -> float:
@@ -65,9 +68,13 @@ class AgentRollout:
         self.policy, self.env_factory, self.scenario = policy, env_factory, scenario
         self.reward_alpha, self.max_action_steps = reward_alpha, max_action_steps
 
-    def run(self, task_id: str) -> RolloutResult:
+    def run(self, task_id: str, *, sampling: GenerationConfig | None = None) -> RolloutResult:
         started = time.monotonic()
         episode = RolloutResult(str(task_id), self.scenario)
+        if sampling is not None:
+            if not sampling.do_sample:
+                raise ValueError("GRPO sampling must be stochastic")
+            episode.token_trace = TokenTrace()
         episode.reward_metrics = {key: 0.0 for key in (*METRIC_KEYS, "r_alpha")}
         env = self.env_factory()
         session_id = None
@@ -81,7 +88,14 @@ class AgentRollout:
             assert_no_evaluator_leakage(episode.messages)
             for _ in range(self.max_action_steps):
                 tick = time.monotonic()
-                response = self.policy.generate(episode.messages)
+                if episode.token_trace is None:
+                    response = self.policy.generate(episode.messages)
+                else:
+                    sample = episode.token_trace.sample_turn(self.policy, episode.messages, sampling)
+                    if sample is None:
+                        episode.status = "context_limit"
+                        break
+                    response = sample.text
                 episode.generation_time_s += time.monotonic() - tick
                 episode.generation_count += 1
                 usage = getattr(self.policy, "last_usage", {})

@@ -46,8 +46,13 @@ assistant <|im_end|>                    → TRAIN (learn to end the turn)
 role headers / delimiters' whitespace / padding → MASK
 ```
 
-一条 trajectory 的所有 assistant turns 共同训练，末尾 terminal user observation 保留但
-全部 MASK。labels 不预先 shift，由 Transformers causal loss 完成 shift。
+一条 trajectory 的所有 assistant turns 共同训练。Round C 小修：source/review projection 仍
+保留 terminal user observation，**Trainer token sequence 在最后 assistant EOS 结束**。
+末尾 observation 对 causal CE 没有作用，因此省略；中间 observation 仍保留并 MASK。
+先按完整原始 history 渲染，再裁掉末尾，避免 Qwen template 因最后角色改变而改写 assistant。
+labels 不预先 shift，由 Transformers causal loss 完成 shift。
+训练 manifest 的 preprocessing 标识同步改为 `visible-messages-qwen-offsets-assistant-eos-v2`，
+防止旧 tokenization 的 checkpoint 静默续接到新序列规则；accepted/review schema 不变。
 
 本地 `tokenizer_config.json` 的 Qwen3 template 没有 `{% generation %}`。它还可能随最后
 user 的位置改变 assistant rendering，所以 **不使用 prefix token-length 差分**。实现：
@@ -57,7 +62,7 @@ user 的位置改变 assistant rendering，所以 **不使用 prefix token-lengt
    逐条 `role/content` ChatML 拼接完全一致；任何文本重写直接报 PREFLIGHT 错误。
 3. fast tokenizer offsets 定位 assistant content + EOS，设置显式 labels；验证 native
    chat-template token IDs 相同、边界不跨 token、每个 assistant EOS 都被训练。
-4. 超过 max_length 直接报错，交给数据选择审查，不静默截断或丢掉最后购买动作。
+4. 裁到最后 assistant EOS 后，超过 max_length 直接报错，交给数据选择审查，不静默截断或丢掉最后购买动作。
 
 TRL 1.12.0 的 source 支持 pretokenized `input_ids/labels`，默认 collator 保留 labels
 并以 -100 padding。这里设置 `dataset_kwargs={"skip_prepare_dataset": true}`，

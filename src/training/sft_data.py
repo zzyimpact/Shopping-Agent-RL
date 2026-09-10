@@ -173,9 +173,16 @@ def tokenize_with_assistant_mask(
         offset += len(block)
     if rendered != "".join(parts):
         raise ValueError("Qwen chat template changed visible text; TRAINING-ENV PREFLIGHT REQUIRED")
+    if not spans:
+        raise ValueError("SFT sample has no assistant loss tokens")
+    # Render the original history first: Qwen can rewrite the last assistant if
+    # we remove the terminal user before rendering. Only the training sequence
+    # ends at the last assistant EOS; source/review messages remain untouched.
+    rendered = rendered[:spans[-1][1]]
     encoded = tokenizer(rendered, add_special_tokens=False, return_offsets_mapping=True)
     input_ids = list(encoded["input_ids"])
-    if input_ids != tokenizer.apply_chat_template(list(messages), tokenize=True, add_generation_prompt=False):
+    full_ids = tokenizer.apply_chat_template(list(messages), tokenize=True, add_generation_prompt=False)
+    if input_ids != full_ids[:len(input_ids)]:
         raise ValueError("chat template/tokenizer IDs disagree")
     if len(input_ids) > max_length:
         raise ValueError("SFT conversation exceeds max_length; select/review data instead of silent truncation")

@@ -143,3 +143,73 @@ class QwenPolicy:
         generated = output[0][prompt_length:]
         self.last_usage = {"input_tokens": prompt_length, "generated_tokens": len(generated)}
         return str(self.tokenizer.decode(generated, skip_special_tokens=True)).strip()
+
+    def prompt_token_ids(self, messages, sampling: GenerationConfig) -> list[int]:
+        return list(self.tokenizer.apply_chat_template(
+            list(messages), tokenize=True, add_generation_prompt=True,
+            **dict(sampling.chat_template_kwargs),
+        ))
+
+    def observation_token_ids(self, observation: str, *, previous_token: int,
+                              sampling: GenerationConfig) -> list[int]:
+        """Only tokenize inserted text; never render/re-tokenize generated history.
+
+        Qwen's native template renders a user observation and the next assistant
+        prefix. A sampled im_end already closes the assistant; when generation
+        hit its token limit the missing close is inserted and owned by the env.
+        """
+        eos = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
+        boundary = "\n" if previous_token == eos else "<|im_end|>\n"
+        suffix = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": observation}], tokenize=False,
+            add_generation_prompt=True, **dict(sampling.chat_template_kwargs),
+        )
+        return list(self.tokenizer(boundary + suffix, add_special_tokens=False)["input_ids"])
+
+    def sample(self, input_ids: Sequence[int], *, sampling: GenerationConfig) -> PolicySample:
+        """Stochastic Transformers sampling on the exact accumulated token stream."""
+        if not sampling.do_sample:
+            raise ValueError("GRPO sampling must be stochastic")
+        remaining = sampling.max_context_tokens - len(input_ids)
+        if remaining < 1:
+            raise ValueError("no remaining sampling context")
+        import torch
+        from transformers import GenerationConfig as HFGenerationConfig
+
+        ids = torch.tensor([list(input_ids)], dtype=torch.long, device=self._device())
+        # A fresh config avoids silently inheriting Qwen's top_k/repetition settings.
+        generation = HFGenerationConfig(
+            do_sample=True, temperature=sampling.temperature, top_p=sampling.top_p, top_k=0,
+            max_new_tokens=min(sampling.max_new_tokens, remaining), num_beams=1,
+            repetition_penalty=1.0, eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.pad_token_id, use_cache=True,
+            return_dict_in_generate=True, output_scores=True,
+        )
+        with torch.inference_mode():
+            output = self.model.generate(input_ids=ids, attention_mask=torch.ones_like(ids),
+                                         generation_config=generation)
+            generated = output.sequences[0, len(input_ids):].tolist()
+            # Includes temperature/top-p processing and the sampled EOS. No text round-trip.
+            scores = self.model.compute_transition_scores(
+                output.sequences, output.scores, normalize_logits=True,
+            )[0].float().cpu().tolist()
+        self.last_usage = {"input_tokens": len(input_ids), "generated_tokens": len(generated)}
+        return PolicySample(self.tokenizer.decode(generated, skip_special_tokens=True).strip(),
+                            generated, scores)
+
+
+@dataclass(frozen=True)
+class PolicySample:
+    """Generated IDs and normalized probabilities from the sampling backend itself."""
+
+    text: str
+    token_ids: list[int]
+    logprobs: list[float]
+
+    def __post_init__(self) -> None:
+        import math
+
+        if not self.token_ids or len(self.token_ids) != len(self.logprobs):
+            raise ValueError("sample token IDs/logprobs must be non-empty and aligned")
+        if any(not math.isfinite(value) or value > 1e-5 for value in self.logprobs):
+            raise ValueError("sampling logprobs must be finite normalized log probabilities")

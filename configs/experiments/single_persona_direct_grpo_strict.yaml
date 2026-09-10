@@ -1,0 +1,5 @@
+scenario: single_persona
+mode: grpo
+init: base
+reward_alpha: 1.0
+# Supply model/output/train manifest and preflight LoRA/microbatch via CLI or local config.

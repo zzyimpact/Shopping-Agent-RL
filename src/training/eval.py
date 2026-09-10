@@ -40,6 +40,7 @@ def episode_summary(result: RolloutResult) -> dict[str, Any]:
     row = asdict(result)
     row["response_characters"] = sum(map(len, row.pop("visible_responses")))
     row.pop("messages")
+    row.pop("token_trace")  # Training-only capture does not change evaluation output.
     return row
 
 

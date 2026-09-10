@@ -160,6 +160,61 @@ def checkpoint_callback(trainer, expected_hash=None, stop_after_one=False):
     return callback
 
 
+def recorded_environment(endpoint, events):
+    """Record only policy-visible projections and session diagnostics, never gold payloads."""
+    from env.teacher_env_client import TeacherEnvClient
+    from rollout.prompt import build_initial_messages, policy_context_from_reset
+
+    class RecordedEnv(TeacherEnvClient):
+        def _request(self, method, path, payload=None):
+            result = super()._request(method, path, payload)
+            body = result.payload
+            event = {"path": path, "seconds": result.latency_s,
+                     "session_id": body.get("session_id"),
+                     "observation": body.get("policy_observation"),
+                     "action": body.get("action"),
+                     "done": bool(body.get("done") or body.get("over"))}
+            if path == "/reset":
+                event["messages"] = build_initial_messages(
+                    policy_context_from_reset(body, payload["scenario"]), body["policy_observation"])
+            events.append(event)
+            return result
+    return RecordedEnv(endpoint)
+
+
+def check_real_trace(policy, sampling, prompt_ids, completion_ids, logprobs, mask, events):
+    """Audit real inserted spans against the actual reset/step observations."""
+    import math
+    resets = [event for event in events if event["path"] == "/reset"]
+    assert len(resets) == 1
+    assert prompt_ids == policy.prompt_token_ids(resets[0]["messages"], sampling)
+    assert len(completion_ids) == len(logprobs) == len(mask)
+    assert all(value in (0, 1) for value in mask)
+    assert completion_ids and mask[0] == mask[-1] == 1
+    assert all(math.isfinite(value) for value in logprobs)
+    steps = [event for event in events if event["path"] == "/step"]
+    spans, cursor = [], 0
+    while cursor < len(mask):
+        if mask[cursor] == 1:
+            cursor += 1
+            continue
+        start = cursor
+        while cursor < len(mask) and mask[cursor] == 0:
+            cursor += 1
+        event = steps[len(spans)]
+        assert not event["done"]
+        expected = policy.observation_token_ids(event["observation"],
+            previous_token=completion_ids[start - 1], sampling=sampling)
+        assert completion_ids[start:cursor] == expected
+        assert logprobs[start:cursor] == [0.0] * len(expected)
+        assert cursor < len(mask) and mask[cursor] == 1
+        spans.append({"start": start, "end": cursor,
+                      "previous_sampled_eos": completion_ids[start - 1] == policy.tokenizer.eos_token_id})
+    assert spans, "real integration gate requires a second generation conditioned on an observation"
+    return {"initial_prompt_exact": True, "inserted_spans": spans,
+            "no_trailing_external_tokens": True}
+
+
 def sft_stage(args, tokenizer, resume=False):
     import torch
     from datasets import Dataset
@@ -226,7 +281,6 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
     from datasets import Dataset
     from training.grpo import build_grpo_trainer, load_grpo_config, task_dataset_rows, train_grpo
     from training.runtime import prepare_run, json_hash
-    from env.teacher_env_client import TeacherEnvClient
     from tests.training.test_rollout import FakeEnv, step_payload
     config = load_grpo_config()
     root = args.output_root / ("real-grpo" if real else "grpo")
@@ -240,15 +294,10 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
     checkpoint = root / "checkpoints/checkpoint-1"
     prepare_run(root, config=config, inputs={"schedule_sha256": json_hash(schedule), "test_only": True},
                 resume_from_checkpoint=checkpoint if resume else None)
-    envs, environment_times, generation_times = [], [], []
-    class TimedEnv(TeacherEnvClient):
-        def _request(self, *a, **kw):
-            result = super()._request(*a, **kw)
-            environment_times.append(result.latency_s)
-            return result
+    envs, environment_events, generation_times = [], [], []
     def factory():
         if real:
-            env = TimedEnv(args.endpoint)
+            env = recorded_environment(args.endpoint, environment_events)
         else:
             env = FakeEnv([step_payload("EXTERNAL_OBSERVATION_O1"),
                            step_payload("TERMINAL_OMITTED", done=True, success=len(envs) % 2 == 0)])
@@ -257,6 +306,17 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
     model = load_model(args.model_path)
     trainer = build_grpo_trainer(model=model, tokenizer=tokenizer,
         dataset=Dataset.from_list(task_dataset_rows(schedule, "single")), config=config, env_factory=factory)
+    reward_calls = []
+    if real:
+        original_reward = trainer.reward_funcs[0]
+        def reward(**kwargs):
+            before_calls = len(environment_events)
+            values = original_reward(**kwargs)
+            assert values == list(kwargs["rollout_reward"])
+            assert len(environment_events) == before_calls
+            reward_calls.append(values)
+            return values
+        trainer.reward_funcs[0] = reward
     if not real:
         original_generate = trainer.model.generate
         def generate(**kwargs):
@@ -287,6 +347,18 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
         assert all(p == [{"role": "user", "content": ""}] for p in prompts)
         metadata = list(current._shop_batch)
         result = original_rollout(prompts, current)
+        if real:
+            from training.policy import QwenPolicy, GenerationConfig
+            policy = QwenPolicy(model=current.model, tokenizer=tokenizer)
+            resets = [e for e in environment_events if e["path"] == "/reset"]
+            assert len(resets) == 2 and len({e["session_id"] for e in resets}) == 2
+            checks = []
+            for index, reset in enumerate(resets):
+                events = [e for e in environment_events if e["session_id"] == reset["session_id"]]
+                assert [e["path"] for e in events].count("/release") == 1
+                checks.append(check_real_trace(policy, GenerationConfig(**config["sampling"]),
+                    result["prompt_ids"][index], result["completion_ids"][index],
+                    result["logprobs"][index], result["env_mask"][index], events))
         for ids, logps, mask in zip(result["completion_ids"], result["logprobs"], result["env_mask"]):
             assert len(ids) == len(logps) == len(mask) and torch.isfinite(torch.tensor(logps)).all()
             if not real:
@@ -296,6 +368,9 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
                          "token_lengths": [len(x) for x in result["completion_ids"]],
                          "policy_tokens": [sum(x) for x in result["env_mask"]],
                          "model_hash": parameter_hash(current.model), "result": result})
+        if real:
+            captured[-1]["token_contract"] = checks
+            captured[-1]["reward_metrics"] = result["rollout_metrics"]
         return result
     trainer.rollout_func = rollout
     original_score = trainer._generate_and_score_completions
@@ -307,6 +382,7 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
             assert result["tool_mask"][i, :len(mask)].tolist() == mask
             assert result["completion_mask"][i, :len(mask)].all()
         captured[-1]["advantages"] = result["advantages"].tolist()
+        captured[-1]["trl_attention_and_tool_mask_exact"] = True
         return result
     trainer._generate_and_score_completions = score
     original_loss = trainer._compute_loss
@@ -350,36 +426,32 @@ def grpo_stage(args, tokenizer, resume=False, real=False):
     for batch in captured:
         batch.pop("result")
     return {"G": 2, "microbatch": 1, "accumulation": 2, "max_action_steps_fixture": 2,
-            "batches": captured, "gradient_mask_checks": len(gradient_checks), "before_hash": before,
+            "batches": captured, "reward_callback_calls": reward_calls,
+            "gradient_mask_checks": len(gradient_checks), "before_hash": before,
             "after_hash": after, "restored": check.restored, "seconds_including_checkpoint": seconds,
             "logs": trainer.state.log_history, "global_step": trainer.state.global_step,
             "project_metrics": [json.loads(line) for line in (root / "metrics.jsonl").read_text().splitlines()],
-            "generation_calls": generation_times, "environment_wait_s": sum(environment_times),
+            "generation_calls": generation_times, "environment_events": environment_events,
+            "environment_wait_s": sum(e["seconds"] for e in environment_events),
             "real_update": ("INCONCLUSIVE_DUE_TO_REWARD_VARIANCE" if real and all(
                 len(set(b["rewards"])) == 1 for b in captured) else "PASS"), **memory()}
 
 
 def real_rollout_stage(args, tokenizer):
-    from env.teacher_env_client import TeacherEnvClient
     from training.policy import GenerationConfig, QwenPolicy
     from training.rollout import AgentRollout
     model = load_model(args.model_path).eval()
     policy = QwenPolicy(model=model, tokenizer=tokenizer)
-    times, sampled = [], []
+    events, sampled = [], []
     original_sample = policy.sample
     def sample(inputs, *, sampling):
         result = original_sample(inputs, sampling=sampling)
         sampled.append((list(inputs), result))
         return result
     policy.sample = sample
-    class TimedEnv(TeacherEnvClient):
-        def _request(self, *a, **kw):
-            result = super()._request(*a, **kw)
-            times.append(result.latency_s)
-            return result
     sampling = GenerationConfig(do_sample=True, max_new_tokens=256, max_context_tokens=8192,
                                 chat_template_kwargs={"enable_thinking": False})
-    result = AgentRollout(policy=policy, scenario="single", env_factory=lambda: TimedEnv(args.endpoint),
+    result = AgentRollout(policy=policy, scenario="single", env_factory=lambda: recorded_environment(args.endpoint, events),
                           max_action_steps=2).run(args.task_id, sampling=sampling)
     trace = result.token_trace
     assert len(trace.completion_ids) == len(trace.logprobs) == len(trace.env_mask)
@@ -392,9 +464,12 @@ def real_rollout_stage(args, tokenizer):
         assert trace.logprobs[offset:end] == sample.logprobs
         assert trace.env_mask[offset:end] == [1] * len(sample.token_ids)
     assert trace.completion_ids[-len(sampled[-1][1].token_ids):] == sampled[-1][1].token_ids
+    contract = check_real_trace(policy, sampling, trace.prompt_ids, trace.completion_ids,
+                               trace.logprobs, trace.env_mask, events)
     return {"task_id": result.task_id, "status": result.status, "steps": result.steps,
             "actions": result.actions, "metrics": result.reward_metrics, "trace": asdict(trace),
-            "generation_s": result.generation_time_s, "environment_s": sum(times),
+            "generation_s": result.generation_time_s, "environment_s": sum(e["seconds"] for e in events),
+            "environment_events": events, "token_contract": contract,
             "total_s": result.wall_time_s, "policy_tokens": sum(trace.env_mask),
             "external_tokens": len(trace.env_mask) - sum(trace.env_mask),
             "generation_prefix_lengths": [len(inputs) for inputs, _ in sampled],

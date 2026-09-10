@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 本脚本只管理自己记录的 remote service/tunnel PID，不做 broad pgrep。
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE_HOST="${TEACHER_ENV_REMOTE_HOST:-rtx-pro-6000-3}"
+REMOTE_HOST="${TEACHER_ENV_REMOTE_HOST:-rtx-4}"
 REMOTE_PROJECT="${TEACHER_ENV_REMOTE_PROJECT:-/root/shopping-agent-rl}"
 REMOTE_PORT="${TEACHER_ENV_REMOTE_PORT:-5100}"
 LOCAL_PORT="${TEACHER_ENV_LOCAL_PORT:-5500}"

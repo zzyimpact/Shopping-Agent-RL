@@ -177,7 +177,8 @@ class QwenPolicy:
         from transformers import GenerationConfig as HFGenerationConfig
 
         ids = torch.tensor([list(input_ids)], dtype=torch.long, device=self._device())
-        # A fresh config avoids silently inheriting Qwen's top_k/repetition settings.
+        # A fresh config + use_model_defaults=False avoids HF replacing explicit
+        # global defaults (temperature/top_p=1) with Qwen artifact settings.
         generation = HFGenerationConfig(
             do_sample=True, temperature=sampling.temperature, top_p=sampling.top_p, top_k=0,
             max_new_tokens=min(sampling.max_new_tokens, remaining), num_beams=1,
@@ -187,7 +188,7 @@ class QwenPolicy:
         )
         with torch.inference_mode():
             output = self.model.generate(input_ids=ids, attention_mask=torch.ones_like(ids),
-                                         generation_config=generation)
+                                         generation_config=generation, use_model_defaults=False)
             generated = output.sequences[0, len(input_ids):].tolist()
             # Includes temperature/top-p processing and the sampled EOS. No text round-trip.
             scores = self.model.compute_transition_scores(

@@ -251,7 +251,8 @@ def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch)
     class Model:
         device = "fake-device"
 
-        def generate(self, input_ids, attention_mask, generation_config):
+        def generate(self, input_ids, attention_mask, generation_config, use_model_defaults):
+            assert use_model_defaults is False
             assert input_ids.rows == [[10, 11]] and attention_mask == "attention"
             assert generation_config.do_sample and generation_config.top_k == 0
             assert generation_config.temperature == 0.7 and generation_config.top_p == 0.9

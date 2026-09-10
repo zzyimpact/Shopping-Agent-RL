@@ -189,6 +189,19 @@ def test_real_unconstrained_sampling(runtime):
     import torch
     from training.policy import QwenPolicy, GenerationConfig
     model = tiny_model(runtime).eval()
+    # Real Qwen3 artifacts have non-global defaults. HF >=4.50 otherwise replaces
+    # explicitly requested temperature=1/top_p=1 with these artifact values.
+    model.generation_config.temperature = 0.6
+    model.generation_config.top_p = 0.95
+    model.generation_config.top_k = 20
+    model.generation_config.repetition_penalty = 1.1
+    effective = []
+    prepare = model._prepare_generation_config
+    def prepare_config(*args, **kwargs):
+        config, rest = prepare(*args, **kwargs)
+        effective.append((config.temperature, config.top_p, config.top_k, config.repetition_penalty))
+        return config, rest
+    model._prepare_generation_config = prepare_config
     policy = QwenPolicy(model=model, tokenizer=runtime)
     sampling = GenerationConfig(do_sample=True, max_new_tokens=3, max_context_tokens=128)
     inputs = policy.prompt_token_ids([{"role": "user", "content": "Hi"}], sampling)
@@ -200,12 +213,14 @@ def test_real_unconstrained_sampling(runtime):
         return result
     model.generate = generate
     sample = policy.sample(inputs, sampling=sampling)
+    assert effective == [(1.0, 1.0, 0, 1.0)]
     result = captured[0]
     assert sample.token_ids == result.sequences[0, len(inputs):].tolist()
     expected = model.compute_transition_scores(result.sequences, result.scores, normalize_logits=True)[0]
     assert torch.allclose(torch.tensor(sample.logprobs), expected)
     assert len(sample.token_ids) == len(sample.logprobs) == 3 and torch.isfinite(expected).all()
     report("sampling", {"token_ids": sample.token_ids, "logprobs": sample.logprobs,
+                        "effective_sampling": effective[0],
                         "backend_ids_exact": True, "device": "cpu"})
 
 

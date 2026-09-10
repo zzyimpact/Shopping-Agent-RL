@@ -37,7 +37,7 @@ existing local tunnel PID: 3632 (5500 -> rtx-4 localhost:5100)
 ```
 
 本地 ps 未发现 formal collector/Python 进程，remote 相关 Python 为上述服务；没有声称
-此前 collection 一直在运行。现有 tunnel 与两个 localhost health 均健康，active_sessions=0。
+此前 collection 一直在运行。开始检查时 tunnel 与两个 localhost health 均健康，active_sessions=0。
 未读取 collection config/API profile、SQLite、accepted/raw；collector CLI 代码的默认 endpoint
 为 5500。无需查 secret 或启动 collector。
 
@@ -144,7 +144,9 @@ remote 独立 snapshot HEAD 仍为 D1，加 D2 policy fix；policy/service/proto
 
 `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/training -q`：
 **52 passed, 5 skipped**（D1 opt-in CPU tests 不重复运行）。`git diff --check`、新增 diff secret scan 通过。
-结束 health active_sessions=0、原 PID 不变；没有残留本轮 GPU model process。
+本轮结束后的只读 health 显示 active_sessions=8，且 service PID 已由 1748 变为 1497；
+这说明外部 collection/service lifecycle 在本轮期间发生了变化。没有尝试解释、清理或重启它，
+也不能把这些 active sessions 归因于本轮 smoke。没有残留本轮 GPU model process。
 
 Formal teacher collector interrupted: **NO**；Teacher API calls: **NONE**；teacher artifacts modified: **NO**。
 未开始 Base evaluation、正式 SFT/GRPO。最终 PASS 仅关闭 runtime gate，不冻结实验参数或启动下一阶段。

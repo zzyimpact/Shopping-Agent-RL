@@ -22,6 +22,9 @@ remote checks, CLI dry-runs, fake/local tests, and tokenizer-only CPU checks. No
 - Host: `rtx-4`; Python: `/root/autodl-tmp/shop-rl-preflight/.venv/bin/python` (Python 3.10.12).
 - Stack still torch 2.8.0+cu128, transformers 4.57.6, TRL 1.12.0, PEFT 0.19.1, accelerate 1.15.0,
   datasets 4.8.5; no package install/upgrade.
+- The venv Python works with the pinned packages, but `bin/activate` is absent. Invoke the absolute
+  Python path below directly; no activation or reinstall is required. The original command drafts
+  incorrectly assumed an activation script existed; only the Python executable had been validated.
 - Model: `/root/autodl-tmp/Qwen3-8B`; small config/tokenizer/index files exist.
 - Dedicated prepared code: `/root/autodl-tmp/shop-rl-eval/code`. Existing `/root/shopping-agent-rl`
   is an older checkout with untracked deployed service files; it is left unchanged.
@@ -61,13 +64,12 @@ without creating the output directory. A dry-run PASS does not verify endpoint a
 
 ```bash
 cd /root/autodl-tmp/shop-rl-eval/code
-source /root/autodl-tmp/shop-rl-preflight/.venv/bin/activate
 export PYTHONPATH="$PWD/src"
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1
 set -o pipefail
 mkdir -p /root/autodl-tmp/shop-rl-eval/logs
-python -u scripts/eval_policy.py \
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python -u scripts/eval_policy.py \
   --scenario single \
   --model-path /root/autodl-tmp/Qwen3-8B \
   --manifest /root/data/shopsim/manifests/eval_128_single.json \
@@ -81,13 +83,12 @@ python -u scripts/eval_policy.py \
 
 ```bash
 cd /root/autodl-tmp/shop-rl-eval/code
-source /root/autodl-tmp/shop-rl-preflight/.venv/bin/activate
 export PYTHONPATH="$PWD/src"
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1
 set -o pipefail
 mkdir -p /root/autodl-tmp/shop-rl-eval/logs
-python -u scripts/eval_policy.py \
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python -u scripts/eval_policy.py \
   --scenario single_persona \
   --model-path /root/autodl-tmp/Qwen3-8B \
   --manifest /root/data/shopsim/manifests/eval_128_single_persona.json \

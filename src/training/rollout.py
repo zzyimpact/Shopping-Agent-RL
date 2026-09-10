@@ -33,6 +33,7 @@ class RolloutResult:
     input_tokens: int | None = None
     generated_tokens: int | None = None
     generation_time_s: float = 0.0
+    environment_wait_s: float = 0.0
     wall_time_s: float = 0.0
     token_trace: TokenTrace | None = None
 
@@ -78,8 +79,16 @@ class AgentRollout:
         episode.reward_metrics = {key: 0.0 for key in (*METRIC_KEYS, "r_alpha")}
         env = self.env_factory()
         session_id = None
+
+        def env_call(name: str, *args: Any, **kwargs: Any) -> Any:
+            tick = time.monotonic()
+            try:
+                return getattr(env, name)(*args, **kwargs)
+            finally:
+                episode.environment_wait_s += time.monotonic() - tick
+
         try:
-            reset = _payload(env.reset(self.scenario, str(task_id)))
+            reset = _payload(env_call("reset", self.scenario, str(task_id)))
             session_id = reset.get("session_id")
             if not isinstance(session_id, str) or not session_id:
                 raise ValueError("environment reset missing session_id")
@@ -112,7 +121,7 @@ class AgentRollout:
                     episode.malformed_action_count += 1
                     break
                 try:
-                    payload = _payload(env.step(
+                    payload = _payload(env_call("step",
                         session_id, response, expected_task_id=str(task_id),
                         expected_scenario=self.scenario,
                     ))
@@ -141,7 +150,7 @@ class AgentRollout:
             try:
                 if session_id:
                     try:
-                        env.release(session_id)
+                        env_call("release", session_id)
                     except Exception:
                         warnings.warn("ShopEnv session release failed", RuntimeWarning)
             finally:

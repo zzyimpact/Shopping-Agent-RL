@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import random
@@ -69,6 +69,7 @@ def load_grpo_config(override=None) -> dict[str, Any]:
         for key, value in yaml.safe_load(path.read_text()).items():
             config[key] = ({**config[key], **value} if isinstance(value, dict)
                            and isinstance(config.get(key), dict) else value)
+    config["sampling"] = asdict(GenerationConfig(**config["sampling"]))
     return config
 
 

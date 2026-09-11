@@ -20,6 +20,8 @@ grpo:
   save_steps: 10
   logging_steps: 1
 sampling:
+  chat_template_kwargs:
+    enable_thinking: false
   do_sample: true
   temperature: 1.0  # Initial project choice, not an optimized/frozen GPU setting.
   top_p: 1.0

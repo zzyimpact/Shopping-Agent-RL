@@ -232,7 +232,8 @@ def test_external_suffix_native_template_owns_inserted_closure_headers_and_prefi
     assert tok.rendered_messages == [{"role": "user", "content": "visible observation"}]
 
 
-def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch):
+@pytest.mark.parametrize("temperature,top_p", [(1.0, 1.0), (0.7, 0.9)])
+def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch, temperature, top_p):
     class Vector(list):
         def tolist(self): return list(self)
         def float(self): return self
@@ -255,7 +256,7 @@ def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch)
             assert use_model_defaults is False
             assert input_ids.rows == [[10, 11]] and attention_mask == "attention"
             assert generation_config.do_sample and generation_config.top_k == 0
-            assert generation_config.temperature == 0.7 and generation_config.top_p == 0.9
+            assert generation_config.temperature == temperature and generation_config.top_p == top_p
             assert generation_config.max_new_tokens == 3
             return SimpleNamespace(sequences=Tensor([[10, 11, 4321, 9876, 200001]]), scores="backend-scores")
 
@@ -270,7 +271,7 @@ def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch)
 
     policy = QwenPolicy(model=Model(), tokenizer=Tokenizer())
     actual = policy.sample([10, 11], sampling=GenerationConfig(
-        do_sample=True, max_context_tokens=5, max_new_tokens=4, temperature=0.7, top_p=0.9))
+        do_sample=True, max_context_tokens=5, max_new_tokens=4, temperature=temperature, top_p=top_p))
     assert actual == PolicySample(BUY, [4321, 9876, 200001], [-0.25, -0.75, -1.25])
     assert policy.last_usage == {"input_tokens": 2, "generated_tokens": 3}
     with pytest.raises(ValueError, match="stochastic"):

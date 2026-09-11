@@ -132,6 +132,7 @@ def evaluate_policy(*, policy: Any, scenario: str, task_ids: Iterable[str], env_
     class ObservedPolicy:
         last_messages = None
         caps = 0
+        turn = 0
 
         @property
         def last_usage(self):
@@ -143,6 +144,14 @@ def evaluate_policy(*, policy: Any, scenario: str, task_ids: Iterable[str], env_
             usage = getattr(policy, "last_usage", {})
             limit = getattr(getattr(policy, "generation", None), "max_new_tokens", None)
             self.caps += int(limit is not None and usage.get("generated_tokens") == limit)
+            self.turn += 1
+            if path:
+                append_metrics(path / "responses.jsonl", {
+                    "task_id": current_task, "turn": self.turn, "captured_at_ns": time.time_ns(),
+                    "visible_response": response, "generated_tokens": usage.get("generated_tokens"),
+                    "at_token_cap": limit is not None and usage.get("generated_tokens") == limit,
+                    **getattr(policy, "last_generation", {}),
+                })
             print(json.dumps({"event": "turn", "task_id": current_task,
                               "generated_tokens": usage.get("generated_tokens"),
                               "at_token_cap": limit is not None and usage.get("generated_tokens") == limit}), flush=True)
@@ -168,6 +177,7 @@ def evaluate_policy(*, policy: Any, scenario: str, task_ids: Iterable[str], env_
             print(json.dumps({"event": "task_start", "task_id": current_task,
                               "index": len(rows) + 1, "total": len(tasks)}), flush=True)
             observed.caps = 0
+            observed.turn = 0
             observed.last_messages = None
             result = runner.run(current_task)
             row = episode_summary(result)

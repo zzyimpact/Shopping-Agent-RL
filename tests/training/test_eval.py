@@ -22,6 +22,9 @@ def test_aggregation_and_episode_output(tmp_path):
     assert [row["task_id"] for row in rows] == ["t1", "t2"]
     assert "PRIVATE" not in json.dumps(rows)
     assert json.loads((tmp_path / "summary.json").read_text()) == summary
+    responses = [json.loads(line) for line in (tmp_path / "responses.jsonl").read_text().splitlines()]
+    assert [row["task_id"] for row in responses] == ["t1", "t2"]
+    assert all(row["visible_response"].startswith("Thought:") for row in responses)
 
 
 def test_manifest_split_and_scenario_are_not_interchangeable(tmp_path):
@@ -88,6 +91,9 @@ def test_cli_resume_identity_and_dry_run(tmp_path):
     config.pop("dry_run"); config.pop("resume")
     _, inputs = script["validate_inputs"](config)
     root = script["prepare_eval_run"](config, inputs, resume=False)
+    saved = json.loads((root / "run_manifest.json").read_text())["identity"]["config"]
+    assert saved["generation"]["chat_template_kwargs"]["enable_thinking"] is False
+    assert not saved["generation"]["do_sample"] and saved["generation"]["max_new_tokens"] == 512
     resumed = script["parse_config"](args + ["--resume"])
     assert resumed.pop("resume")
     resumed.pop("dry_run")
@@ -101,6 +107,9 @@ def test_cli_resume_identity_and_dry_run(tmp_path):
         with pytest.raises(ValueError, match="TEST-only"):
             script["validate_eval_health"]({**health, "task_split": split})
     script["validate_eval_health"]({**health, "task_split": "test"})
+    (root / "invalidation.json").write_text('{"status":"INVALIDATED_BY_GENERATION_CONTRACT"}')
+    with pytest.raises(ValueError, match="DO NOT RESUME"):
+        script["main"](args + ["--resume"])
 
 
 @pytest.mark.skipif(not os.environ.get("QWEN_TOKENIZER_PATH"), reason="local tokenizer opt-in; no weights")
@@ -115,5 +124,5 @@ def test_real_eval_profile_native_template():
                 {"role": "assistant", "content": "Thought: search\nAction: search[shoes]"},
                 {"role": "user", "content": "page2"}]
     counts = prompt_profile(policy, messages)
-    assert counts["rendered_input_tokens"] == len(tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True))
+    assert counts["rendered_input_tokens"] == len(tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, enable_thinking=False))
     assert 0 < counts["observation_header_tokens"] < counts["rendered_input_tokens"]

@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from training.policy import GenerationConfig, QwenPolicy
 
@@ -46,10 +47,35 @@ def test_injected_policy_template_device_and_completion_only_decode():
     assert policy.generate(messages).endswith("Action: search[shoes]")
     assert tokenizer.messages == messages
     assert tokenizer.kwargs["add_generation_prompt"] is True
+    assert tokenizer.kwargs["enable_thinking"] is False
     assert tokenizer.encoding.device == model.device
     assert model.kwargs["attention_mask"] is tokenizer.encoding["attention_mask"]
     assert "temperature" not in model.kwargs  # Greedy evaluator default.
     assert policy.last_usage == {"input_tokens": 3, "generated_tokens": 2}
+    assert policy.last_generation["token_ids"] == [80, 81]
+    assert policy.last_generation["raw_text"].startswith("Thought:")
+    assert model.kwargs["use_model_defaults"] is False
+
+
+def test_greedy_neutralizes_artifact_sampling_defaults_without_changing_eos():
+    model = FakeModel()
+    model.generation_config = SimpleNamespace(do_sample=True, temperature=0.6, top_p=0.95,
+                                             top_k=20, eos_token_id=[81, 82], pad_token_id=82)
+    policy = QwenPolicy(model=model, tokenizer=FakeTokenizer(), adapter_path="sft-checkpoint")
+    policy.generate([{"role": "user", "content": "state"}])
+    cfg = model.kwargs["generation_config"]
+    assert not cfg.do_sample and (cfg.temperature, cfg.top_p, cfg.top_k) == (1, 1, 50)
+    assert cfg.eos_token_id == [81, 82] and cfg.pad_token_id == 82
+    assert model.generation_config.do_sample and model.generation_config.temperature == 0.6
+    assert not {"temperature", "top_p", "top_k"} & model.kwargs.keys()
+    assert policy.last_generation["ended_with_eos"]
+    assert policy.tokenizer.kwargs["enable_thinking"] is False
+
+
+def test_project_native_thinking_cannot_be_reenabled():
+    assert GenerationConfig(chat_template_kwargs={}).chat_template_kwargs == {"enable_thinking": False}
+    with pytest.raises(ValueError, match="enable_thinking=False"):
+        GenerationConfig(chat_template_kwargs={"enable_thinking": True})
 
 
 def test_context_limit_refuses_silent_history_truncation():

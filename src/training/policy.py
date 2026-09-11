@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -20,9 +21,12 @@ class GenerationConfig:
     top_p: float = 1.0
     do_sample: bool = False
     max_context_tokens: int = 32768
-    chat_template_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, Any] = field(default_factory=lambda: {"enable_thinking": False})
 
     def __post_init__(self) -> None:
+        if self.chat_template_kwargs.get("enable_thinking", False) is not False:
+            raise ValueError("project v1 requires enable_thinking=False")
+        object.__setattr__(self, "chat_template_kwargs", {**self.chat_template_kwargs, "enable_thinking": False})
         if self.max_new_tokens < 1 or self.max_context_tokens <= self.max_new_tokens:
             raise ValueError("invalid generation/context token budget")
         if self.do_sample and (self.temperature <= 0 or not 0 < self.top_p <= 1):
@@ -50,6 +54,7 @@ class QwenPolicy:
         self.adapter_path = str(adapter_path) if adapter_path is not None else None
         self.generation = generation or GenerationConfig()
         self.last_usage: dict[str, int] = {}
+        self.last_generation: dict[str, Any] = {}
         self.model = model
         self.tokenizer = tokenizer
         self.device_map = device_map
@@ -110,6 +115,7 @@ class QwenPolicy:
         if not self.is_loaded:
             raise RuntimeError("QwenPolicy runtime 尚未加载")
         self.last_usage = {}
+        self.last_generation = {}
         encoded = self.tokenizer.apply_chat_template(
             list(messages),
             add_generation_prompt=True,
@@ -131,9 +137,17 @@ class QwenPolicy:
         kwargs: dict[str, Any] = {
             "max_new_tokens": self.generation.max_new_tokens,
             "do_sample": self.generation.do_sample,
+            "use_model_defaults": False,
         }
         if self.generation.do_sample:
             kwargs.update(temperature=self.generation.temperature, top_p=self.generation.top_p)
+        elif getattr(self.model, "generation_config", None) is not None:
+            # Preserve artifact EOS/stopping, but neutralize inherited sampling-only
+            # settings on a copy. HF validates these even when greedy ignores them.
+            generation = deepcopy(self.model.generation_config)
+            generation.do_sample = False
+            generation.temperature, generation.top_p, generation.top_k = 1.0, 1.0, 50
+            kwargs["generation_config"] = generation
         if attention_mask is not None:
             kwargs["attention_mask"] = attention_mask
         prompt_length = int(input_ids.shape[-1])
@@ -142,7 +156,16 @@ class QwenPolicy:
         output = self.model.generate(input_ids=input_ids, **kwargs)
         generated = output[0][prompt_length:]
         self.last_usage = {"input_tokens": prompt_length, "generated_tokens": len(generated)}
-        return str(self.tokenizer.decode(generated, skip_special_tokens=True)).strip()
+        token_ids = generated.tolist() if hasattr(generated, "tolist") else list(generated)
+        eos = getattr(getattr(self.model, "generation_config", None), "eos_token_id",
+                      getattr(self.tokenizer, "eos_token_id", None))
+        eos_ids = eos if isinstance(eos, list) else [eos] if eos is not None else []
+        self.last_generation = {"token_ids": token_ids,
+                                "raw_text": str(self.tokenizer.decode(token_ids, skip_special_tokens=False)),
+                                "eos_token_ids": eos_ids,
+                                "ended_with_eos": bool(token_ids and token_ids[-1] in eos_ids),
+                                "enable_thinking": False}
+        return str(self.tokenizer.decode(token_ids, skip_special_tokens=True)).strip()
 
     def prompt_token_ids(self, messages, sampling: GenerationConfig) -> list[int]:
         return list(self.tokenizer.apply_chat_template(

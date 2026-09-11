@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 import sys
 
@@ -60,7 +61,7 @@ def parse_config(argv=None):
             parser.error(f"{key} required via CLI or config")
     if config["scenario"] not in {"single", "single_persona"} or not 0 <= config["reward_alpha"] <= 1:
         parser.error("invalid scenario or reward_alpha")
-    GenerationConfig(**config["generation"])
+    config["generation"] = asdict(GenerationConfig(**config["generation"]))
     return config
 
 
@@ -94,6 +95,7 @@ def validate_inputs(config):
 
 def prepare_eval_run(config, inputs, *, resume):
     root = Path(config["output_dir"]).resolve()
+    reject_invalidated_run(root)
     if not resume:
         root = prepare_run(root, config=config, inputs=inputs)
         (root / "config.json").write_text(json.dumps(config, indent=2) + "\n")
@@ -110,6 +112,11 @@ def prepare_eval_run(config, inputs, *, resume):
     return root
 
 
+def reject_invalidated_run(root):
+    if (Path(root) / "invalidation.json").exists():
+        raise ValueError("INVALIDATED_BY_GENERATION_CONTRACT: DO NOT RESUME or reuse this output directory")
+
+
 def validate_eval_health(health):
     if health.get("environment_version") != "task-scoped-v3-multisession":
         raise ValueError("incompatible environment protocol")
@@ -120,6 +127,7 @@ def validate_eval_health(health):
 def main(argv=None) -> int:
     config = parse_config(argv)
     resume, dry_run = config.pop("resume"), config.pop("dry_run")
+    reject_invalidated_run(config["output_dir"])
     task_ids, inputs = validate_inputs(config)
     if dry_run:
         print(json.dumps({"event": "dry_run", "config": config, "inputs": inputs,

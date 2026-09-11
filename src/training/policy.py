@@ -11,6 +11,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+CONTEXT_BOUNDARY_STRATEGY = "remaining_context_budget_v1"
+
 
 @dataclass(frozen=True)
 class GenerationConfig:
@@ -160,8 +162,24 @@ class QwenPolicy:
         if attention_mask is not None:
             kwargs["attention_mask"] = attention_mask
         prompt_length = int(input_ids.shape[-1])
-        if prompt_length + self.generation.max_new_tokens > self.generation.max_context_tokens:
-            raise ValueError("visible history plus generation budget exceeds max_context_tokens; no silent truncation")
+        remaining = self.generation.max_context_tokens - prompt_length
+        effective = max(0, min(self.generation.max_new_tokens, remaining))
+        self.last_generation = {
+            "input_tokens_before_generation": prompt_length,
+            "configured_max_new_tokens": self.generation.max_new_tokens,
+            "effective_max_new_tokens": effective,
+            "remaining_context_tokens": remaining,
+            "context_budget_reduced": effective < self.generation.max_new_tokens,
+            "generated_tokens": 0, "eos_reached": False,
+            "context_window_cap": False, "normal_generation_cap": False,
+            "context_limit": remaining <= 0, "model_called": remaining > 0,
+            "token_ids": [], "raw_text": "", "ended_with_eos": False,
+            "enable_thinking": False,
+        }
+        if remaining <= 0:
+            self.last_usage = {"input_tokens": prompt_length, "generated_tokens": 0}
+            return ""
+        kwargs["max_new_tokens"] = effective
         output = self.model.generate(input_ids=input_ids, **kwargs)
         generated = output[0][prompt_length:]
         self.last_usage = {"input_tokens": prompt_length, "generated_tokens": len(generated)}
@@ -169,11 +187,15 @@ class QwenPolicy:
         eos = getattr(getattr(self.model, "generation_config", None), "eos_token_id",
                       getattr(self.tokenizer, "eos_token_id", None))
         eos_ids = eos if isinstance(eos, list) else [eos] if eos is not None else []
-        self.last_generation = {"token_ids": token_ids,
-                                "raw_text": str(self.tokenizer.decode(token_ids, skip_special_tokens=False)),
-                                "eos_token_ids": eos_ids,
-                                "ended_with_eos": bool(token_ids and token_ids[-1] in eos_ids),
-                                "enable_thinking": False}
+        ended_with_eos = bool(token_ids and token_ids[-1] in eos_ids)
+        context_cap = effective < self.generation.max_new_tokens and len(token_ids) >= effective and not ended_with_eos
+        self.last_generation.update(
+            token_ids=token_ids, raw_text=str(self.tokenizer.decode(token_ids, skip_special_tokens=False)),
+            eos_token_ids=eos_ids, ended_with_eos=ended_with_eos, eos_reached=ended_with_eos,
+            generated_tokens=len(token_ids), context_window_cap=context_cap, context_limit=context_cap,
+            normal_generation_cap=(effective == self.generation.max_new_tokens
+                                   and len(token_ids) >= effective and not ended_with_eos),
+        )
         return str(self.tokenizer.decode(token_ids, skip_special_tokens=True)).strip()
 
     def prompt_token_ids(self, messages, sampling: GenerationConfig) -> list[int]:

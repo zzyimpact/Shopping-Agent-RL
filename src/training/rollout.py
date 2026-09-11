@@ -36,6 +36,9 @@ class RolloutResult:
     environment_wait_s: float = 0.0
     wall_time_s: float = 0.0
     token_trace: TokenTrace | None = None
+    context_limit_at_step: int | None = None
+    final_input_tokens: int | None = None
+    remaining_context_tokens: int | None = None
 
     @property
     def reward(self) -> float:
@@ -106,13 +109,26 @@ class AgentRollout:
                         break
                     response = sample.text
                 episode.generation_time_s += time.monotonic() - tick
-                episode.generation_count += 1
+                # The generate path exposes hard-window outcomes; GRPO's separate
+                # token-trace/sample path keeps its existing semantics.
+                generation = (getattr(self.policy, "last_generation", {})
+                              if episode.token_trace is None else {})
+                episode.generation_count += int(generation.get("model_called", True))
                 usage = getattr(self.policy, "last_usage", {})
                 for name in ("input_tokens", "generated_tokens"):
                     if usage.get(name) is not None:
                         setattr(episode, name, (getattr(episode, name) or 0) + int(usage[name]))
                 if not isinstance(response, str):
                     raise TypeError("policy.generate must return assistant text")
+                if generation.get("context_limit"):
+                    episode.status = "context_limit"
+                    episode.context_limit_at_step = episode.steps + 1  # 1-based attempted action turn.
+                    episode.final_input_tokens = generation["input_tokens_before_generation"]
+                    episode.remaining_context_tokens = generation["remaining_context_tokens"]
+                    if response:
+                        episode.visible_responses.append(response)
+                        episode.messages.append({"role": "assistant", "content": response})
+                    break  # Never parse or send a context-truncated action to ShopEnv.
                 episode.visible_responses.append(response)
                 trace = trace_visible_action(response)
                 if not trace["canonical"]:

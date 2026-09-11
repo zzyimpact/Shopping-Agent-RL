@@ -213,6 +213,8 @@ def test_formal_config_and_sampled_resume_guards(tmp_path):
     assert config["sampling_seed_strategy"] == SAMPLING_SEED_STRATEGY
     assert config["base_seed"] == config["seed"] == 1
     assert config["use_model_defaults"] is False
+    from training.policy import CONTEXT_BOUNDARY_STRATEGY
+    assert config["context_boundary_strategy"] == CONTEXT_BOUNDARY_STRATEGY
     from env.evaluation_rng import ENVIRONMENT_RNG_STRATEGY, rng_contract
     assert config["environment_rng_strategy"] == ENVIRONMENT_RNG_STRATEGY
     health = {"status": "ok", "environment_version": "task-scoped-v3-multisession", "task_split": "test"}
@@ -250,6 +252,74 @@ def test_formal_config_and_sampled_resume_guards(tmp_path):
     (root / "audit_status.json").write_text('{"status":"PAUSED_FOR_BASELINE_SEMANTICS_AUDIT"}')
     with pytest.raises(ValueError, match="DO NOT RESUME"):
         script["main"](args + ["--resume"])
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+@pytest.mark.parametrize("context_input", [32468, 32768])
+def test_context_failure_counts_and_is_skipped_on_resume(tmp_path, monkeypatch, interrupt, context_input):
+    from training.policy import QwenPolicy
+    from tests.training.test_policy import BoundaryModel, BoundaryTokenizer
+    # Tokenizer profiling is tested separately; these fixtures model token lengths only.
+    monkeypatch.setattr("training.eval.prompt_profile", lambda *args: None)
+    policy = QwenPolicy(model=BoundaryModel(100, True), tokenizer=BoundaryTokenizer(10))
+    calls, envs = [], []
+
+    class EpisodeEnv(FakeEnv):
+        def reset(self, scenario, task_id):
+            calls.append(task_id)
+            if interrupt and task_id == "t3":
+                raise KeyboardInterrupt()
+            policy.tokenizer = BoundaryTokenizer(context_input if task_id == "t2" else 10)
+            policy.model = BoundaryModel(300 if task_id == "t2" else 100, task_id != "t2")
+            return super().reset(scenario, task_id)
+
+    def factory():
+        env = EpisodeEnv([step_payload("done", done=True, success=True)])
+        envs.append(env)
+        return env
+
+    def run(resume=False):
+        return evaluate_policy(policy=policy, scenario="single", task_ids=["t1", "t2", "t3"],
+                               env_factory=factory, output_dir=tmp_path, resume=resume)
+
+    if interrupt:
+        with pytest.raises(KeyboardInterrupt):
+            run()
+        saved = (tmp_path / "episodes.jsonl").read_bytes()
+        assert len(saved.splitlines()) == 2
+        interrupt = False
+        summary = run(resume=True)
+        assert (tmp_path / "episodes.jsonl").read_bytes().startswith(saved)
+        assert calls == ["t1", "t2", "t3", "t3"]
+    else:
+        summary = run()
+        assert calls == ["t1", "t2", "t3"]
+    assert summary["episodes"] == summary["expected_episodes"] == 3 and summary["complete"]
+    assert summary["metrics"]["r_finish"] == pytest.approx(2/3)
+    assert summary["status_counts"] == {"success": 2, "context_limit": 1}
+    assert summary["diagnostics"]["context_limit_count"] == 1
+    assert summary["diagnostics"]["total_context_window_cap_count"] == int(context_input < 32768)
+    assert summary["diagnostics"]["total_generation_cap_count"] == 0
+    assert summary["diagnostics"]["error_count"] == int(len(calls) == 4)
+    assert not envs[1].responses
+    row = json.loads((tmp_path / "episodes.jsonl").read_text().splitlines()[1])
+    assert row["episode_seed"] == 2 and row["manifest_index"] == 1
+    assert row["context_limit_at_step"] == 1 and row["final_input_tokens"] == context_input
+    assert row["remaining_context_tokens"] == 32768 - context_input
+    response = json.loads((tmp_path / "responses.jsonl").read_text().splitlines()[1])
+    assert response["context_window_cap"] == (context_input < 32768)
+    assert not response["at_token_cap"] and not response["eos_reached"]
+    assert response["effective_max_new_tokens"] == len(response["token_ids"]) == 32768 - context_input
+    assert bool(response["raw_text"]) == response["model_called"] == (context_input < 32768)
+
+
+def test_aborted_context_run_cannot_resume(tmp_path):
+    import runpy
+    from pathlib import Path
+    script = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/eval_policy.py"))
+    (tmp_path / "abort_status.json").write_text('{"status":"ABORTED_CONTEXT_BOUNDARY_SEMANTICS"}')
+    with pytest.raises(ValueError, match="ABORTED_CONTEXT_BOUNDARY_SEMANTICS"):
+        script["reject_invalidated_run"](tmp_path)
 
 
 @pytest.mark.skipif(not os.environ.get("QWEN_TOKENIZER_PATH"), reason="local tokenizer opt-in; no weights")

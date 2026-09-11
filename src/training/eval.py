@@ -117,6 +117,7 @@ def evaluation_summary(rows, *, scenario, reward_alpha, expected, invocation_s, 
                    "invalid_action_count": sum(row["invalid_action_count"] for row in rows),
                    "malformed_action_count": sum(row["malformed_action_count"] for row in rows),
                    "max_steps_count": statuses.get("max_steps", 0),
+                   "context_limit_count": statuses.get("context_limit", 0),
                    "finish_count": sum(row["reward_metrics"]["r_finish"] == 1 for row in rows),
                    "success_count": sum(row["reward_metrics"]["r_succ"] == 1 for row in rows),
                    "trajectories_per_hour": count / wall * 3600 if wall else None,
@@ -124,7 +125,7 @@ def evaluation_summary(rows, *, scenario, reward_alpha, expected, invocation_s, 
                        if len(generated) == count and generation_s else None}
     for key in ("steps", "wall_time_s", "generation_count", "generation_time_s", "environment_wait_s",
                 "response_characters", "input_tokens", "generated_tokens", "full_trajectory_tokens",
-                "observation_header_tokens", "generation_cap_count"):
+                "observation_header_tokens", "generation_cap_count", "context_window_cap_count"):
         values = [row[key] for row in rows if row.get(key) is not None]
         diagnostics[f"mean_{key}"] = sum(values) / len(values) if values else None
         diagnostics[f"total_{key}"] = sum(values) if len(values) == count and count else None
@@ -160,30 +161,43 @@ def evaluate_policy(*, policy: Any, scenario: str, task_ids: Iterable[str], env_
     class ObservedPolicy:
         last_messages = None
         caps = 0
+        context_caps = 0
         turn = 0
 
         @property
         def last_usage(self):
             return policy.last_usage
 
+        @property
+        def last_generation(self):
+            return getattr(policy, "last_generation", {})
+
         def generate(self, messages):
             self.last_messages = [dict(m) for m in messages]
             response = policy.generate(messages)
             usage = getattr(policy, "last_usage", {})
             limit = getattr(getattr(policy, "generation", None), "max_new_tokens", None)
-            self.caps += int(limit is not None and usage.get("generated_tokens") == limit)
+            generation = self.last_generation
+            normal_cap = generation.get("normal_generation_cap", limit is not None and usage.get("generated_tokens") == limit)
+            self.caps += int(normal_cap)
+            self.context_caps += int(generation.get("context_window_cap", False))
             self.turn += 1
             if path:
                 append_metrics(path / "responses.jsonl", {
                     "task_id": current_task, "turn": self.turn, "captured_at_ns": time.time_ns(),
                     "manifest_index": manifest_index, "episode_seed": current_seed,
                     "visible_response": response, "generated_tokens": usage.get("generated_tokens"),
-                    "at_token_cap": limit is not None and usage.get("generated_tokens") == limit,
-                    **getattr(policy, "last_generation", {}),
+                    "at_token_cap": normal_cap,
+                    **generation,
                 })
             print(json.dumps({"event": "turn", "task_id": current_task,
                               "generated_tokens": usage.get("generated_tokens"),
-                              "at_token_cap": limit is not None and usage.get("generated_tokens") == limit}), flush=True)
+                              "at_token_cap": normal_cap,
+                              **{key: generation.get(key) for key in (
+                                  "input_tokens_before_generation", "configured_max_new_tokens",
+                                  "effective_max_new_tokens", "remaining_context_tokens",
+                                  "context_budget_reduced", "eos_reached", "context_window_cap",
+                                  "normal_generation_cap", "context_limit", "model_called")}}), flush=True)
             return response
 
     observed = ObservedPolicy()
@@ -209,12 +223,14 @@ def evaluate_policy(*, policy: Any, scenario: str, task_ids: Iterable[str], env_
                               "index": manifest_index + 1, "total": len(tasks),
                               "manifest_index": manifest_index, "episode_seed": current_seed}), flush=True)
             observed.caps = 0
+            observed.context_caps = 0
             observed.turn = 0
             observed.last_messages = None
             result = runner.run(current_task)
             row = episode_summary(result)
             row.update(manifest_index=manifest_index, episode_seed=current_seed)
             row["generation_cap_count"] = observed.caps
+            row["context_window_cap_count"] = observed.context_caps
             profile = prompt_profile(policy, observed.last_messages) if observed.last_messages else None
             row["full_trajectory_tokens"] = (profile["rendered_input_tokens"] + policy.last_usage["generated_tokens"]
                                              if profile else None)

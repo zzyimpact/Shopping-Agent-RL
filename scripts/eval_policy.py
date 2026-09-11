@@ -18,7 +18,7 @@ from env.teacher_env_client import TeacherEnvClient
 from env.evaluation_rng import ENVIRONMENT_RNG_STRATEGY, rng_contract
 from training.eval import (SAMPLING_SEED_STRATEGY, completed_rows, episode_seed,
                            evaluate_policy, load_task_ids)
-from training.policy import GenerationConfig, QwenPolicy
+from training.policy import CONTEXT_BOUNDARY_STRATEGY, GenerationConfig, QwenPolicy
 from training.runtime import load_config, model_metadata, prepare_run, sha256_file, append_metrics
 
 
@@ -102,6 +102,7 @@ def validate_inputs(config):
         if (config["seed"] != 1 or config["max_action_steps"] != 30
                 or config["generation"] != FORMAL_GENERATION or config["reward_alpha"] != 1.0
                 or config.get("environment_rng_strategy") != ENVIRONMENT_RNG_STRATEGY
+                or config.get("context_boundary_strategy") != CONTEXT_BOUNDARY_STRATEGY
                 or config.get("diagnostic_only") or config.get("merge_into_formal_results") is False):
             raise ValueError("formal evaluation requires frozen non-thinking sampling/512/32768, seed=1, 30 steps, strict reward")
     tokenizer = config["tokenizer_path"] or config["model_path"]
@@ -134,6 +135,8 @@ def prepare_eval_run(config, inputs, *, resume):
 
 
 def reject_invalidated_run(root):
+    if (Path(root) / "abort_status.json").exists():
+        raise ValueError("ABORTED_CONTEXT_BOUNDARY_SEMANTICS: DO NOT RESUME or reuse this output directory")
     if (Path(root) / "invalidation.json").exists():
         raise ValueError("INVALIDATED_BY_GENERATION_CONTRACT: DO NOT RESUME or reuse this output directory")
     if (Path(root) / "audit_status.json").exists():

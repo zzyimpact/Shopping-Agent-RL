@@ -100,8 +100,86 @@ def test_invalid_sampling_filter_config(kwargs):
         GenerationConfig(**kwargs)
 
 
-def test_context_limit_refuses_silent_history_truncation():
-    policy = QwenPolicy(model=FakeModel(), tokenizer=FakeTokenizer(),
-                        generation=GenerationConfig(max_context_tokens=4, max_new_tokens=2))
-    with pytest.raises(ValueError, match="no silent truncation"):
-        policy.generate([{"role": "user", "content": "state"}])
+class BoundaryTokenizer(FakeTokenizer):
+    eos_token_id = 99
+
+    def __init__(self, input_tokens):
+        self.encoding = Encoding(input_ids=Tensor([[10] * input_tokens]),
+                                 attention_mask=Tensor([[1] * input_tokens]))
+
+    def decode(self, tokens, **kwargs):
+        return "Thought: buy\nAction: click[Buy]" if tokens else ""
+
+
+class BoundaryModel:
+    device = "test-device"
+
+    def __init__(self, count, eos):
+        self.count, self.eos, self.calls = count, eos, 0
+
+    def generate(self, **kwargs):
+        self.calls += 1
+        self.kwargs = kwargs
+        count = min(self.count, kwargs["max_new_tokens"])
+        tokens = [80] * count
+        if self.eos and count:
+            tokens[-1] = 99
+        return Tensor([kwargs["input_ids"][0] + tokens])
+
+
+@pytest.mark.parametrize("input_tokens,count,eos,effective,context_limit,normal_cap", [
+    (32256, 100, True, 512, False, False),
+    (32468, 100, True, 300, False, False),
+    (32468, 300, True, 300, False, False),  # EOS at the last available token is normal.
+    (32468, 300, False, 300, True, False),
+    (32768, 100, True, 0, True, False),
+    (32769, 100, True, 0, True, False),
+    (32256, 512, False, 512, False, True),
+    (32256, 512, True, 512, False, False),
+])
+def test_hard_context_budget(input_tokens, count, eos, effective, context_limit, normal_cap):
+    model, tokenizer = BoundaryModel(count, eos), BoundaryTokenizer(input_tokens)
+    policy = QwenPolicy(model=model, tokenizer=tokenizer)
+    messages = [{"role": "user", "content": "unchanged history"}]
+    policy.generate(messages)
+    detail = policy.last_generation
+    assert tokenizer.messages == messages
+    assert tokenizer.encoding["input_ids"].shape[-1] == input_tokens
+    assert "truncation" not in tokenizer.kwargs
+    assert model.calls == int(effective > 0)
+    if effective:
+        assert model.kwargs["max_new_tokens"] == effective
+    assert detail["input_tokens_before_generation"] == input_tokens
+    assert detail["configured_max_new_tokens"] == 512
+    assert detail["effective_max_new_tokens"] == effective
+    assert detail["remaining_context_tokens"] == 32768 - input_tokens
+    assert detail["context_budget_reduced"] == (effective < 512)
+    assert detail["context_limit"] == context_limit
+    assert detail["context_window_cap"] == (context_limit and effective > 0)
+    assert detail["normal_generation_cap"] == normal_cap
+    assert detail["eos_reached"] == (eos and effective > 0)
+    assert detail["generated_tokens"] == len(detail["token_ids"])
+
+
+@pytest.mark.parametrize("input_tokens,count,eos,status,actions", [
+    (32468, 100, True, "success", 1),
+    (32468, 300, True, "success", 1),
+    (32468, 300, False, "context_limit", 0),
+    (32768, 100, True, "context_limit", 0),
+])
+def test_rollout_context_outcome_never_executes_partial_action(input_tokens, count, eos, status, actions):
+    from training.rollout import AgentRollout
+    from tests.training.test_rollout import FakeEnv, step_payload
+    env = FakeEnv([step_payload("done", done=True, success=True)])
+    policy = QwenPolicy(model=BoundaryModel(count, eos), tokenizer=BoundaryTokenizer(input_tokens))
+    result = AgentRollout(policy=policy, env_factory=lambda: env, scenario="single").run("t1")
+    assert result.status == status
+    assert len(env.responses) == len(result.actions) == result.steps == actions
+    assert env.released == ["session-1"] and env.closed
+    if status == "context_limit":
+        assert not result.malformed_action_count
+        assert all(value == 0 for value in result.reward_metrics.values())
+        assert result.context_limit_at_step == 1
+        assert result.final_input_tokens == input_tokens
+        assert result.remaining_context_tokens == 32768 - input_tokens
+        assert result.generation_count == int(input_tokens < 32768)

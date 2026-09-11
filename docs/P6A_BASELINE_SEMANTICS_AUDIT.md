@@ -4,7 +4,7 @@
 
 POLICY_OBSERVATION_PARITY: PASS. EVAL_DECODING: FROZEN.
 EVALUATOR_TASK_LOCAL_RNG: PASS. TEST_ENVIRONMENT_LOCAL_RNG: PASS.
-SAMPLED_EVAL_RESUME_SAFE: YES. SINGLE_128_V3_COMMAND_READY: YES, user-run only.
+SAMPLED_EVAL_RESUME_SAFE: YES. SINGLE_128_V4_COMMAND_READY: YES, user-run only.
 The previously identified environment RNG blocker is resolved by the authorized
 TEST-only RNG scopes below. No model or formal evaluation was run to establish this.
 The audit/preparation sections below are historical; their REOPENED/candidate labels
@@ -103,8 +103,58 @@ equivalence. The actual full runtime/model was deliberately not loaded in this r
 
 Artifacts retained unchanged: v1 has INVALIDATED_BY_GENERATION_CONTRACT; v2 has
 PAUSED_FOR_BASELINE_SEMANTICS_AUDIT; both DO NOT RESUME. The Mode B run remains
-diagnostic-only and must never be resumed/merged as formal. Only the new v3 directory
-below is eligible for formal resume. The evaluator rejects invalidation/audit markers.
+diagnostic-only and must never be resumed/merged as formal. V3 is now
+ABORTED_CONTEXT_BOUNDARY_SEMANTICS (details below), DO NOT RESUME. Only the new v4
+directory below is eligible for formal resume. The evaluator rejects invalidation,
+audit and abort markers.
+
+### V4 hard-context boundary contract
+
+User-run v3 at commit 612f959 saved 12 episodes: 6 max_steps, 4 terminal_unsuccessful,
+1 invalid_action and 1 success. Task 672313913968 (manifest_index=12, episode_seed=13)
+saved 28 responses; the 29th generation attempt failed before model.generate under
+the old input+512 reservation check. No exact failing input count was persisted.
+The additive v3/abort_status.json marks ABORTED_CONTEXT_BOUNDARY_SEMANTICS and records
+SHA256 hashes of unchanged episodes/responses/summary/errors/config/run manifest.
+No partial response is turned into a fabricated completed episode. Previous results
+are diagnostic only and must not merge into v4. V4 starts the original frozen128 anew.
+
+Formal config records context_boundary_strategy=remaining_context_budget_v1.
+Keep 32768 context, configured max_new_tokens=512 and max_action_steps=30 unchanged.
+Every turn computes remaining=32768-input_tokens from the full actual rendered history.
+If remaining<=0, no model call occurs and the episode completes as context_limit.
+Otherwise effective_max_new_tokens=min(512,remaining). No history deletion,
+truncation, summary, sliding window, retry or larger context is introduced.
+
+If a reduced budget is exhausted without EOS, classify context_window_cap=true and
+context_limit; persist the raw response and token IDs, but never parse/execute it.
+EOS on or before the final available token remains normal generation. At unreduced
+512, a non-EOS cap remains normal_generation_cap, not a context-window cap. Ordinary
+cap handling/parser semantics are unchanged. at_token_cap/generation_cap_count now
+mean normal non-EOS generation caps; context_window_cap_count is separate.
+
+context_limit is a completed policy failure with all unfinished reward metrics zero,
+included in the manifest denominator and skipped on same-version resume. It is not
+an infrastructure error and does not abort the run. A response diagnostic row is
+also saved for a pre-generation context limit (model_called=false, zero tokens).
+Each turn reports input_tokens_before_generation, configured/effective_max_new_tokens,
+remaining_context_tokens, context_budget_reduced, generated_tokens, eos_reached,
+normal_generation_cap, context_window_cap and context_limit. Episodes additionally
+record context_limit_at_step (1-based attempted action turn), final_input_tokens
+(input at that attempt), remaining_context_tokens (before that attempted generation).
+Thus a reduced-cap episode may report remaining=300 and generated=300, not remaining=0.
+generation_count counts actual model calls, excluding a no-space pre-generation check.
+The summary adds context_limit_count and context_window_cap diagnostics.
+
+QwenPolicy.generate and AgentRollout's non-token-trace branch implement this boundary.
+QwenPolicy.sample, GRPO token provenance, sampling filters, group size and training RNG
+are untouched. CPU-only validation: 42 passed, 1 unrelated optional tokenizer profile
+skipped for test_policy.py/test_rollout.py/test_eval.py, plus 8 directly relevant GRPO
+sample/token-trace tests passed (11 unrelated tests deselected). No GPU/model/replay.
+Tests cover full/reduced/exhausted budgets, early/last-token EOS, partial action not
+sent to env, release, zero rewards, three-task continuation, and resume skipping both
+pre-generation and post-generation context_limit outcomes. Compile/diff/secret checks
+and remote v4 CLI --dry-run validate the remaining handoff without starting evaluation.
 
 ### Current user commands: A/B, then C
 
@@ -130,7 +180,7 @@ curl --fail --silent --show-error http://127.0.0.1:5200/health
 Require task_split=test and TEST-reset/release plus TRAIN/unknown rejection PASS.
 Also require evaluation_rng.strategy=test_runtime_task_session_sha256_v1 and
 evaluation_rng.formal_eval_seed=1. Helper start explicitly supplies --eval-seed 1.
-No model is loaded by A/B. C, user-run Single fixed-128 v3, no adapter:
+No model is loaded by A/B. C, user-run Single fixed-128 v4, no adapter:
 
 ```bash
 (
@@ -145,14 +195,14 @@ mkdir -p /root/autodl-tmp/shop-rl-eval/logs
   --scenario single --model-path /root/autodl-tmp/Qwen3-8B \
   --manifest /root/data/shopsim/manifests/eval_128_single.json \
   --endpoint http://127.0.0.1:5200 \
-  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v3 \
+  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v4 \
   --fixed-128 --seed 1 --reward strict \
-  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v3.log
+  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v4.log
 )
 ```
 
 Ctrl+C once releases the active session, preserves completed rows and writes summary.
-Do not kill -9. Keep the same deployed commit/config/files. Exact v3 resume:
+Do not kill -9. Keep the same deployed commit/config/files. Exact v4 resume:
 
 ```bash
 (
@@ -167,9 +217,9 @@ mkdir -p /root/autodl-tmp/shop-rl-eval/logs
   --scenario single --model-path /root/autodl-tmp/Qwen3-8B \
   --manifest /root/data/shopsim/manifests/eval_128_single.json \
   --endpoint http://127.0.0.1:5200 \
-  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v3 \
+  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v4 \
   --fixed-128 --seed 1 --reward strict --resume \
-  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v3.log
+  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v4.log
 )
 ```
 
@@ -184,13 +234,14 @@ cd /root/autodl-tmp/shop-rl-eval/code
 ```
 
 No new probe or automatic Single-to-Persona chain. Normal max_steps,
-terminal_unsuccessful and occasional loops are valid Base outcomes, not stop gates.
-Stop/review systemic malformed/caps, endpoint failures or context overflow.
+terminal_unsuccessful, context_limit and occasional loops are valid Base outcomes,
+not stop gates. Stop/review systemic malformed/caps, endpoint failures or unexpected
+context-handling exceptions; ordinary completed context_limit is now counted normally.
 Optional second terminal: `watch -n 2 nvidia-smi`.
-After 128, return terminal summary, v3/eval/summary.json and eval/errors.jsonl if present.
+After 128, return terminal summary, v4/eval/summary.json and eval/errors.jsonl if present.
 Review all eight metrics, finishes/successes, max_steps, context max/p95 from saved
 episodes, caps/malformed/invalid, trajectories/hour and model/environment wall time.
-Compare paper numbers directionally only. Persona is HELD UNTIL SINGLE-128 v3 REVIEW.
+Compare paper numbers directionally only. Persona is HELD UNTIL SINGLE-128 v4 REVIEW.
 Full evaluation, SFT and GRPO remain user-controlled and were not started by Codex.
 
 ### Validation for this freeze only

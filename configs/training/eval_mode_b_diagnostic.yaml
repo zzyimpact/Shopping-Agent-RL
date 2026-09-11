@@ -1,0 +1,14 @@
+# Diagnostic only: not a formal evaluation or a frozen project decoding choice.
+diagnostic_only: true
+evaluation_purpose: nonthinking_sampling_six_task_behavior_diagnostic
+merge_into_formal_results: false
+generation:
+  chat_template_kwargs:
+    enable_thinking: false
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  max_new_tokens: 512
+  max_context_tokens: 32768

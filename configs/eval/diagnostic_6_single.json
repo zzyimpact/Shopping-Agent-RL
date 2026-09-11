@@ -1,0 +1,15 @@
+{
+  "diagnostic_only": true,
+  "merge_into_formal_results": false,
+  "selection": "User-specified existing IDs, retained in frozen-128 order; no random sampling",
+  "source_manifest": "/root/data/shopsim/manifests/eval_128_single.json",
+  "source_sha256": "3d4ddb3dc26cb9616e685e20997ed31a1f940c3bc52467b23ce6cd0cc62bf1a4",
+  "tasks": [
+    {"task_id": "715265851689", "scenario": "single", "official_split": "test"},
+    {"task_id": "679786107726", "scenario": "single", "official_split": "test"},
+    {"task_id": "590860568914", "scenario": "single", "official_split": "test"},
+    {"task_id": "879763900818", "scenario": "single", "official_split": "test"},
+    {"task_id": "713324276879", "scenario": "single", "official_split": "test"},
+    {"task_id": "727130683779", "scenario": "single", "official_split": "test"}
+  ]
+}

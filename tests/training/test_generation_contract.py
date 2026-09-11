@@ -56,3 +56,27 @@ def test_real_qwen_non_thinking_and_greedy_config():
     assert model.seen.endswith(closed)
     assert policy.last_generation["token_ids"] == [tokenizer.eos_token_id]
     assert policy.last_generation["ended_with_eos"]
+
+
+@pytest.mark.skipif(not os.environ.get("QWEN_TOKENIZER_PATH"), reason="tokenizer/config-only opt-in")
+def test_mode_b_hf_filters_without_forward():
+    import torch
+    from transformers import GenerationConfig as HFConfig
+    from transformers.generation.utils import GenerationMixin
+    from transformers.generation.logits_process import LogitsProcessorList
+    from training.runtime import PROJECT_ROOT
+    candidate = load_config(PROJECT_ROOT / "configs/training/eval_mode_b_diagnostic.yaml")["generation"]
+    cfg = HFConfig.from_pretrained(os.environ["QWEN_TOKENIZER_PATH"], local_files_only=True)
+    for key in ("do_sample", "temperature", "top_p", "top_k", "min_p", "max_new_tokens"):
+        setattr(cfg, key, candidate[key])
+    cfg.validate(strict=True)
+    # Real pinned Transformers processor construction, not model generation.
+    cfg._eos_token_tensor = torch.tensor(cfg.eos_token_id)
+    processors = GenerationMixin()._get_logits_processor(
+        generation_config=cfg, input_ids_seq_length=3, encoder_input_ids=None,
+        prefix_allowed_tokens_fn=None, logits_processor=LogitsProcessorList(), device="cpu")
+    names = [type(p).__name__ for p in processors]
+    assert names == ["TemperatureLogitsWarper", "TopKLogitsWarper", "TopPLogitsWarper", "MinPLogitsWarper"]
+    assert processors[0].temperature == 0.7 and processors[1].top_k == 20 and processors[2].top_p == 0.8
+    scores = torch.tensor([[0.0, -1.0, -float("inf")]])
+    assert torch.equal(processors[3](torch.tensor([[1, 2, 3]]), scores), scores)

@@ -19,6 +19,8 @@ class GenerationConfig:
     max_new_tokens: int = 512
     temperature: float = 1.0
     top_p: float = 1.0
+    top_k: int | None = None
+    min_p: float | None = None
     do_sample: bool = False
     max_context_tokens: int = 32768
     chat_template_kwargs: Mapping[str, Any] = field(default_factory=lambda: {"enable_thinking": False})
@@ -31,6 +33,10 @@ class GenerationConfig:
             raise ValueError("invalid generation/context token budget")
         if self.do_sample and (self.temperature <= 0 or not 0 < self.top_p <= 1):
             raise ValueError("sampling requires temperature > 0 and 0 < top_p <= 1")
+        if self.top_k is not None and (not isinstance(self.top_k, int) or self.top_k < 0):
+            raise ValueError("top_k must be a nonnegative integer")
+        if self.min_p is not None and not 0 <= self.min_p <= 1:
+            raise ValueError("min_p must be in [0, 1]")
 
 
 class QwenPolicy:
@@ -141,6 +147,9 @@ class QwenPolicy:
         }
         if self.generation.do_sample:
             kwargs.update(temperature=self.generation.temperature, top_p=self.generation.top_p)
+            for name in ("top_k", "min_p"):
+                if getattr(self.generation, name) is not None:
+                    kwargs[name] = getattr(self.generation, name)
         elif getattr(self.model, "generation_config", None) is not None:
             # Preserve artifact EOS/stopping, but neutralize inherited sampling-only
             # settings on a copy. HF validates these even when greedy ignores them.
@@ -193,6 +202,8 @@ class QwenPolicy:
         """Stochastic Transformers sampling on the exact accumulated token stream."""
         if not sampling.do_sample:
             raise ValueError("GRPO sampling must be stochastic")
+        if sampling.top_k not in (None, 0) or sampling.min_p not in (None, 0):
+            raise ValueError("GRPO retains top_k=0 and disabled min_p; Mode B is evaluation-only")
         remaining = sampling.max_context_tokens - len(input_ids)
         if remaining < 1:
             raise ValueError("no remaining sampling context")

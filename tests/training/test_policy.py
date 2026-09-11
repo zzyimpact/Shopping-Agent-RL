@@ -78,6 +78,28 @@ def test_project_native_thinking_cannot_be_reenabled():
         GenerationConfig(chat_template_kwargs={"enable_thinking": True})
 
 
+def test_mode_b_explicit_sampling_kwargs_and_no_grpo_leakage():
+    from training.runtime import load_config, PROJECT_ROOT
+    cfg = load_config(PROJECT_ROOT / "configs/training/eval_mode_b_diagnostic.yaml")
+    assert cfg["diagnostic_only"] and not cfg["merge_into_formal_results"]
+    model, tok = FakeModel(), FakeTokenizer()
+    policy = QwenPolicy(model=model, tokenizer=tok, generation=GenerationConfig(**cfg["generation"]))
+    policy.generate([{"role": "user", "content": "state"}])
+    assert {k:model.kwargs[k] for k in ("temperature", "top_p", "top_k", "min_p")} == {
+        "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0}
+    assert model.kwargs["use_model_defaults"] is False and tok.kwargs["enable_thinking"] is False
+    assert model.kwargs["max_new_tokens"] == 512
+    assert cfg["max_action_steps"] == 30 and cfg["seed"] == 1
+    with pytest.raises(ValueError, match="evaluation-only"):
+        policy.sample([10], sampling=policy.generation)
+
+
+@pytest.mark.parametrize("kwargs", [{"top_k": -1}, {"top_k": 0.5}, {"min_p": 1.1}])
+def test_invalid_sampling_filter_config(kwargs):
+    with pytest.raises(ValueError):
+        GenerationConfig(**kwargs)
+
+
 def test_context_limit_refuses_silent_history_truncation():
     policy = QwenPolicy(model=FakeModel(), tokenizer=FakeTokenizer(),
                         generation=GenerationConfig(max_context_tokens=4, max_new_tokens=2))

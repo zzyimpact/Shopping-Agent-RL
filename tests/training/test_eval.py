@@ -96,6 +96,11 @@ def test_cli_resume_identity_and_dry_run(tmp_path):
         script["prepare_eval_run"]({**resumed, "seed": 2}, inputs, resume=True)
     with pytest.raises(ValueError, match="frozen P2"):
         script["validate_inputs"]({**config, "fixed_128": True})
+    health = {"status": "ok", "environment_version": "task-scoped-v3-multisession"}
+    for split in (None, "train"):
+        with pytest.raises(ValueError, match="TEST-only"):
+            script["validate_eval_health"]({**health, "task_split": split})
+    script["validate_eval_health"]({**health, "task_split": "test"})
 
 
 @pytest.mark.skipif(not os.environ.get("QWEN_TOKENIZER_PATH"), reason="local tokenizer opt-in; no weights")

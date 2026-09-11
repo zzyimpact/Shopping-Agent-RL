@@ -103,8 +103,25 @@ def _safe_persona(value: Any) -> dict[str, Any]:
     return {str(key): item for key, item in value.items() if str(key) not in forbidden}
 
 
-def manifest_ids(path: Path) -> set[str]:
-    return {str(item["task_id"]) for item in json.loads(path.read_text(encoding="utf-8"))["tasks"]}
+def manifest_ids(path: Path, scenario: str, split: str) -> set[str]:
+    tasks = json.loads(path.read_text(encoding="utf-8"))["tasks"]
+    if not tasks or any(item.get("scenario") != scenario or item.get("official_split") != split
+                        or not item.get("task_id") for item in tasks):
+        raise ValueError(f"invalid official split manifest: {path}")
+    ids = {str(item["task_id"]) for item in tasks}
+    if len(ids) != len(tasks):
+        raise ValueError(f"duplicate task IDs: {path}")
+    return ids
+
+
+def load_admission(manifests: Path) -> dict[str, dict[str, set[str]]]:
+    # P2 full official pools, never the sampled eval_128 or SFT manifests.
+    pools = {split: {scenario: manifest_ids(manifests / f"{split}_{scenario}.json", scenario, split)
+                     for scenario in ("single", "single_persona")} for split in ("train", "test")}
+    for scenario in ("single", "single_persona"):
+        if pools["train"][scenario] & pools["test"][scenario]:
+            raise ValueError(f"official train/test overlap: {scenario}")
+    return pools
 
 
 def _memory_metrics() -> dict[str, int | None]:
@@ -171,6 +188,7 @@ def health():
         return jsonify({
         "status": "ok", "mode": "task_scoped_multisession",
         "shared_runtime": True,
+        "task_split": settings.get("task_split", "train"),
         "catalog": str(settings["catalog"]), "search_root": str(settings["search_root"]),
         "source_fingerprint": settings["source_fingerprint"],
         "runtime_loaded": settings.get("server") is not None,
@@ -188,8 +206,9 @@ def reset():
     scenario, task_id = body.get("scenario"), str(body.get("task_id", ""))
     if scenario not in {"single", "single_persona"}:
         return jsonify({"error": "invalid scenario"}), 400
-    if task_id not in settings["train_ids"][scenario]:
-        return jsonify({"error": "task_id is not in frozen TRAIN manifest"}), 400
+    task_split = settings.get("task_split", "train")
+    if task_id not in settings[f"{task_split}_ids"][scenario]:
+        return jsonify({"error": f"task_id is not in frozen {task_split.upper()} manifest"}), 400
     with environment_lock:
         if len(sessions) >= int(settings.get("max_sessions", MAX_SESSIONS)):
             return jsonify({"error": "session capacity exhausted"}), 503
@@ -368,9 +387,11 @@ def main() -> None:
     parser.add_argument("--manifests", default="/root/data/shopsim/manifests", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5100, type=int)
+    parser.add_argument("--task-split", choices=("train", "test"), default="train")
     parser.add_argument("--source-fingerprint", default="unknown")
     parser.add_argument("--max-sessions", default=MAX_SESSIONS, type=int)
     args = parser.parse_args()
+    pools = load_admission(args.manifests)
     upstream_root = Path(os.environ.get("UPSTREAM_ROOT", "/root/ShopSimulator"))
     sys.path[:0] = [str(upstream_root / "shop_env"), str(upstream_root / "shop_env/shop_env")]
     os.environ["SHOPSIM_SEARCH_ROOT"] = str(args.search_root)
@@ -379,10 +400,8 @@ def main() -> None:
         "catalog": args.catalog, "search_root": args.search_root,
         "source_fingerprint": args.source_fingerprint,
         "max_sessions": max(1, min(int(args.max_sessions), MAX_SESSIONS)),
-        "train_ids": {
-            "single": manifest_ids(args.manifests / "train_single.json"),
-            "single_persona": manifest_ids(args.manifests / "train_single_persona.json"),
-        },
+        "task_split": args.task_split,
+        "train_ids": pools["train"], "test_ids": pools["test"],
     })
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 

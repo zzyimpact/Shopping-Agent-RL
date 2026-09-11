@@ -110,6 +110,13 @@ def prepare_eval_run(config, inputs, *, resume):
     return root
 
 
+def validate_eval_health(health):
+    if health.get("environment_version") != "task-scoped-v3-multisession":
+        raise ValueError("incompatible environment protocol")
+    if health.get("status") != "ok" or health.get("task_split") != "test":
+        raise ValueError("evaluation requires a healthy explicit TEST-only endpoint; use port 5200")
+
+
 def main(argv=None) -> int:
     config = parse_config(argv)
     resume, dry_run = config.pop("resume"), config.pop("dry_run")
@@ -123,11 +130,8 @@ def main(argv=None) -> int:
         completed_rows(Path(config["output_dir"]) / "eval/episodes.jsonl", task_ids, config["scenario"])
     with TeacherEnvClient(config["endpoint"]) as env:
         health = env.health().payload
-    if health.get("environment_version") != "task-scoped-v3-multisession":
-        raise ValueError("incompatible environment protocol")
+    validate_eval_health(health)
     print(json.dumps({"event": "environment_health", "health": health}), flush=True)
-    # Health alone cannot prove TEST admission on older TRAIN-only services.
-    print("Required: endpoint must accept this scenario's official TEST IDs. TRAIN-only service is incompatible.", flush=True)
     import torch
     from transformers import set_seed
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:

@@ -26,7 +26,8 @@ def service_module(monkeypatch):
 
 class _MutatingEnv:
     def __init__(self, *, initial_clickables):
-        self.text_to_clickable = {name: object() for name in initial_clickables}
+        # Upstream get_available_actions lowercases button text keys.
+        self.text_to_clickable = {name.lower(): object() for name in initial_clickables}
         self.calls = []
 
     def get_available_actions(self):

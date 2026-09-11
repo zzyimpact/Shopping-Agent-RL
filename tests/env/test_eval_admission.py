@@ -33,7 +33,7 @@ def service(monkeypatch, tmp_path):
             self.server = server
             self.instruction_text = "shop"
             self.instruction_simple = "simple shop"
-            self.text_to_clickable = {"Buy Now": True}
+            self.text_to_clickable = {"buy now": True}
         def reset(self, idx):
             self.idx = idx
             self.server.user_sessions[idx] = {"page": "initial"}
@@ -86,6 +86,7 @@ def test_split_admission_isolation_and_reward(service, split, scenario):
     assert module.sessions[ids[0]]["slot"] != module.sessions[ids[1]]["slot"]
     result = client.post("/step", json={"session_id": ids[0], "response": "Thought: buy\nAction: click[Buy Now]"})
     assert result.status_code == 200 and result.json["reward"] == 0.75 and result.json["done"]
+    assert result.json["action_valid"] is True
     second_slot = module.sessions[ids[1]]["slot"]
     assert module.settings["server"].user_sessions[second_slot]["page"] == "initial"
     for session in ids:
@@ -128,3 +129,10 @@ def test_lifecycle_command_and_pid_ownership(tmp_path, monkeypatch):
     monkeypatch.setattr(eval_env, "process_identity", lambda pid: {**saved, "starttime": "456"})
     with pytest.raises(RuntimeError, match="ownership mismatch"):
         eval_env.owned_identity()
+
+
+def test_lifecycle_rejects_missing_pidfd_before_start(monkeypatch):
+    from scripts import eval_env
+    monkeypatch.delattr(eval_env.os, "pidfd_open", raising=False)
+    with pytest.raises(RuntimeError, match="pidfd required"):
+        eval_env.require_pidfd()

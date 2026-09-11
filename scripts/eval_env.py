@@ -30,6 +30,11 @@ def service_command():
             "--manifests", str(MANIFESTS)]
 
 
+def require_pidfd():
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("use /root/autodl-tmp/shop-rl-preflight/.venv/bin/python for this helper; pidfd required")
+
+
 def request(path, body=None, timeout=120):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(URL + path, data=data, headers={"Content-Type": "application/json"})
@@ -154,6 +159,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("start", "stop", "check"))
     args = parser.parse_args()
+    require_pidfd()  # Fail before spawning if this Python cannot safely stop its process.
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / "shop_env_test_5200.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

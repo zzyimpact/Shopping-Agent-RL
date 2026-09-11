@@ -1,5 +1,10 @@
 # P6A-Prep — Base fixed-128 command preparation
 
+Historical prep record. Its blocked 5100 command drafts below are superseded by
+[the TEST endpoint gate](P6A_TEST_ENDPOINT_GATE.md), with explicit TEST-only port 5200
+and user-controlled A -> B -> C commands. Preserve this original FAIL history; do not
+run the historical 5100 commands.
+
 Starting HEAD/origin/main: `3014a9a`. **BASE_128_COMMAND_READY: NO**.
 The commands below match the actual CLI and frozen manifests, but must NOT be launched yet:
 current shared ShopEnv implementation permits only TRAIN IDs; its reset handler rejects TEST IDs

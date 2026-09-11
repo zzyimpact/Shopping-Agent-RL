@@ -1,5 +1,167 @@
 # P6A Base behavior audit
 
+## Final decision: formal sampling and task-local resume
+
+POLICY_OBSERVATION_PARITY: PASS. EVAL_DECODING: FROZEN.
+EVALUATOR_TASK_LOCAL_RNG: PASS. End-to-end SAMPLED_EVAL_RESUME_SAFE: NO pending
+the independently randomized TEST environment described below. The v3 command is
+prepared but HOLD: do not start it until that strict-reproducibility blocker is resolved.
+The audit/preparation sections below are historical; their REOPENED/candidate labels
+describe the earlier stage, not the current decision. Do not rerun those commands.
+
+The user completed Mode B: 6 episodes, 4 finishes, 1 success, 2 max_steps,
+0 invalid/malformed/caps/infrastructure errors; mean steps 15.6667.
+Rloose=.5317460317, Rstrict=.1666666667, Rsucc=.1666666667,
+Rfinish=.6666666667, Rcategory=.6666666667, Rattribute=.5833333333,
+Roption=.1666666667, Rprice=.6666666667.
+679786107726 changed from greedy max_steps to success in 8 actions;
+727130683779 changed from invalid action to terminal finish in 9 actions.
+715265851689 and 713324276879 still reached max_steps. Sampling materially changes
+and improves the pathological greedy distribution; it does not eliminate all loops.
+Six selected cases are diagnostic evidence, not an estimate of formal Base performance.
+
+`configs/training/eval_formal.yaml` now freezes checkpoint evaluation:
+enable_thinking=false, do_sample=true, temperature=.7, top_p=.8, top_k=20,
+min_p=0, use_model_defaults=false, max_new_tokens=512, max_context_tokens=32768,
+max_action_steps=30, seed=base_seed=1, reward_alpha=1 (strict).
+This is [PROJECT-FIXED] Qwen3 non-thinking recommended sampling, a project
+implementation choice, not paper-disclosed exact serving configuration.
+The unified policy already passes use_model_defaults=false. No policy, prompt,
+parser, environment, reward, SFT formatting or GRPO sampling changes are made here.
+GRPO remains temperature=1/top_p=1/top_k=0/G=8, independent stochastic exploration.
+
+The evaluator alone uses `sampling_seed_strategy=per_episode_manifest_index_v1`.
+`manifest_index` is zero-based in the original complete manifest;
+`episode_seed=base_seed+manifest_index` (Single-128 seeds 1 through 128).
+Transformers set_seed seeds Python, NumPy, torch CPU and all CUDA devices once
+before each episode, never before each turn. An interrupted episode resets and
+restarts with the same seed; completed episodes are skipped without changing indices.
+Both episodes.jsonl and responses.jsonl record index and episode_seed. Incomplete
+response attempts remain append-only evidence; repeated task/turn rows after resume
+are not extra completed episodes. Timestamps/timing/errors are not expected to match.
+
+Resume requires exact config, manifest file hash and ordered-ID hash, base seed,
+seed strategy, model/tokenizer metadata, adapter path and project commit. Keep weights,
+adapter contents, environment data, software and hardware unchanged. Task-local seeding
+removes dependence on prior tasks' draw counts; it is not a claim of bitwise equality
+across GPU architectures/kernels or changed remote observations. No CUDA RNG binary
+checkpoint or GRPO-wide reseeding is introduced.
+
+A read-only check found an additional, pre-existing end-to-end limitation in the
+deployed upstream: `engine/goal.py:get_existed_goals` samples `price_upper` on each
+reset (line 77), and `get_reward` uses that threshold for r_price (lines 234-236).
+`engine/engine.py:generate_product_prices` samples multi-price products at load
+(line 182); special `search[<r>]` also samples products (line 148).
+The service calls get_goals again for each reset. None of these remote-process RNGs
+is controlled by evaluator set_seed. Thus matching policy draws alone cannot prove
+identical complete observations/rewards, even on identical hardware. Existing parity
+PASS is not contradicted: service and upstream share those semantics.
+No environment/price/reward fix has been attempted in this evaluator-only change.
+Minimal TEST-environment RNG control needs an explicit follow-up scope decision;
+do not claim strict end-to-end resume safety or start v3 before resolving it.
+
+Artifacts retained unchanged: v1 has INVALIDATED_BY_GENERATION_CONTRACT; v2 has
+PAUSED_FOR_BASELINE_SEMANTICS_AUDIT; both DO NOT RESUME. The Mode B run remains
+diagnostic-only and must never be resumed/merged as formal. Only the new v3 directory
+below is eligible for formal resume. The evaluator rejects invalidation/audit markers.
+
+### Current user commands: A/B, then C
+
+Prepared commands, ON HOLD pending the environment RNG blocker above.
+Run on rtx-4 after resolving it and manually selecting GPU mode. At preparation, 5200 was stopped,
+port free, and stale PID 1868 was absent. Only that dead pidfile was archived to
+`run/shop_env_test_5200.pid.stale-1868`; no process was signaled. The existing helper
+starts one TEST-only instance, never restarts a healthy owned instance, logs to
+`logs/shop_env_test_5200.log`, and pins PID ownership with starttime/argv and pidfd.
+An ownership mismatch fails safely; never broad-kill or remove a live PID record.
+
+A/B (service uses /root/miniconda3/bin/python; helper uses GPU environment Python):
+
+```bash
+(
+set -euo pipefail
+cd /root/autodl-tmp/shop-rl-eval/code
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python scripts/eval_env.py start
+curl --fail --silent --show-error http://127.0.0.1:5200/health
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python scripts/eval_env.py check
+)
+```
+
+Require task_split=test and TEST-reset/release plus TRAIN/unknown rejection PASS.
+No model is loaded by A/B. C, user-run Single fixed-128 v3, no adapter:
+
+```bash
+(
+set -euo pipefail
+cd /root/autodl-tmp/shop-rl-eval/code
+export PYTHONPATH="$PWD/src"
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
+export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1
+mkdir -p /root/autodl-tmp/shop-rl-eval/logs
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python -u scripts/eval_policy.py \
+  --config configs/training/eval_formal.yaml \
+  --scenario single --model-path /root/autodl-tmp/Qwen3-8B \
+  --manifest /root/data/shopsim/manifests/eval_128_single.json \
+  --endpoint http://127.0.0.1:5200 \
+  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v3 \
+  --fixed-128 --seed 1 --reward strict \
+  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v3.log
+)
+```
+
+Ctrl+C once releases the active session, preserves completed rows and writes summary.
+Do not kill -9. Keep the same deployed commit/config/files. Exact v3 resume:
+
+```bash
+(
+set -euo pipefail
+cd /root/autodl-tmp/shop-rl-eval/code
+export PYTHONPATH="$PWD/src"
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
+export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=2 TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1
+mkdir -p /root/autodl-tmp/shop-rl-eval/logs
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python -u scripts/eval_policy.py \
+  --config configs/training/eval_formal.yaml \
+  --scenario single --model-path /root/autodl-tmp/Qwen3-8B \
+  --manifest /root/data/shopsim/manifests/eval_128_single.json \
+  --endpoint http://127.0.0.1:5200 \
+  --output-dir /root/autodl-tmp/shop-rl-eval/runs/p6a-base-128-single-seed1-v3 \
+  --fixed-128 --seed 1 --reward strict --resume \
+  2>&1 | tee -a /root/autodl-tmp/shop-rl-eval/logs/p6a-base-128-single-seed1-v3.log
+)
+```
+
+Stop the TEST service only after evaluation has exited and released sessions:
+
+```bash
+(
+set -euo pipefail
+cd /root/autodl-tmp/shop-rl-eval/code
+/root/autodl-tmp/shop-rl-preflight/.venv/bin/python scripts/eval_env.py stop
+)
+```
+
+No new probe or automatic Single-to-Persona chain. Normal max_steps,
+terminal_unsuccessful and occasional loops are valid Base outcomes, not stop gates.
+Stop/review systemic malformed/caps, endpoint failures or context overflow.
+Optional second terminal: `watch -n 2 nvidia-smi`.
+After 128, return terminal summary, v3/eval/summary.json and eval/errors.jsonl if present.
+Review all eight metrics, finishes/successes, max_steps, context max/p95 from saved
+episodes, caps/malformed/invalid, trajectories/hour and model/environment wall time.
+Compare paper numbers directionally only. Persona is HELD UNTIL SINGLE-128 v3 REVIEW.
+Full evaluation, SFT and GRPO remain user-controlled and were not started by Codex.
+
+### Validation for this freeze only
+
+CPU-only `tests/training/test_eval.py`: 9 passed, 1 optional real-tokenizer profiling
+test skipped (template/policy unchanged). Includes real Python/NumPy/torch CPU draws,
+two-turn fake sampled episodes, uninterrupted tasks 1/2/3 vs interrupt after task 2
+consumed RNG then resume 2/3, seed/index metadata, old-marker rejection, exact identity
+and commit guards, formal config resolution and model-free CLI dry-run.
+No full training tests, model loading, GPU preflight or service/replay run.
+Compile, diff whitespace and changed-file secret checks pass;
+the deployed formal fixed-128 command is validated with --dry-run only.
+
 ## Verdict and scope
 
 **POLICY_OBSERVATION_PARITY_PASS_DECODING_IS_MAIN_VARIABLE** for the bounded audit.

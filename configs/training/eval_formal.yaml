@@ -1,0 +1,18 @@
+# PROJECT-FIXED: Qwen3 non-thinking recommended sampling, not paper-disclosed serving.
+formal_evaluation: true
+use_model_defaults: false
+seed: 1
+base_seed: 1
+sampling_seed_strategy: per_episode_manifest_index_v1
+max_action_steps: 30
+reward_alpha: 1.0
+generation:
+  chat_template_kwargs:
+    enable_thinking: false
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  max_new_tokens: 512
+  max_context_tokens: 32768

@@ -15,7 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from env.teacher_env_client import TeacherEnvClient
-from training.eval import completed_rows, evaluate_policy, load_task_ids
+from training.eval import (SAMPLING_SEED_STRATEGY, completed_rows, episode_seed,
+                           evaluate_policy, load_task_ids)
 from training.policy import GenerationConfig, QwenPolicy
 from training.runtime import load_config, model_metadata, prepare_run, sha256_file, append_metrics
 
@@ -62,6 +63,9 @@ def parse_config(argv=None):
     if config["scenario"] not in {"single", "single_persona"} or not 0 <= config["reward_alpha"] <= 1:
         parser.error("invalid scenario or reward_alpha")
     config["generation"] = asdict(GenerationConfig(**config["generation"]))
+    config.setdefault("base_seed", config["seed"])
+    config.setdefault("sampling_seed_strategy", SAMPLING_SEED_STRATEGY)
+    config.setdefault("use_model_defaults", False)
     return config
 
 
@@ -69,19 +73,35 @@ FIXED_IDS_HASH = {
     "single": "2bddabe94e2367fff581c771b2bee9d602906e5aa07e83be51a8c69624bd9155",
     "single_persona": "68db6d538a6c06efe0e181957499bef470be73b01ae77ad2eb48174864ba3410",
 }
+FORMAL_GENERATION = asdict(GenerationConfig(
+    do_sample=True, temperature=0.7, top_p=0.8, top_k=20, min_p=0.0))
+
+
+def validate_seed_contract(config):
+    if config.get("sampling_seed_strategy") != SAMPLING_SEED_STRATEGY:
+        raise ValueError("evaluation requires per_episode_manifest_index_v1 seed strategy")
+    episode_seed(config["base_seed"], 0)
+    if config["seed"] != config["base_seed"]:
+        raise ValueError("evaluation seed must equal base_seed")
+    if config.get("use_model_defaults") is not False:
+        raise ValueError("evaluation requires use_model_defaults=false")
 
 
 def validate_inputs(config):
     tasks = load_task_ids(config["task_manifest"], scenario=config["scenario"], split="test")
     ids_hash = hashlib.sha256("\n".join(tasks).encode()).hexdigest()
+    validate_seed_contract(config)
+    episode_seed(config["base_seed"], len(tasks) - 1)
     if config["fixed_128"]:
         if len(tasks) != 128 or ids_hash != FIXED_IDS_HASH[config["scenario"]]:
             raise ValueError("fixed-128 manifest differs from frozen P2 task IDs/order")
-        expected = dict(GenerationConfig().__dict__)
-        actual = {**expected, **config["generation"]}
-        if (config["seed"] != 1 or config["max_action_steps"] != 30 or config["adapter_path"]
-                or actual != expected):
-            raise ValueError("fixed-128 Base requires seed=1, 30 steps, default greedy/512/native template, no adapter")
+        if not config.get("formal_evaluation") or config["adapter_path"]:
+            raise ValueError("fixed-128 Base requires eval_formal config and no adapter")
+    if config.get("formal_evaluation"):
+        if (config["seed"] != 1 or config["max_action_steps"] != 30
+                or config["generation"] != FORMAL_GENERATION or config["reward_alpha"] != 1.0
+                or config.get("diagnostic_only") or config.get("merge_into_formal_results") is False):
+            raise ValueError("formal evaluation requires frozen non-thinking sampling/512/32768, seed=1, 30 steps, strict reward")
     tokenizer = config["tokenizer_path"] or config["model_path"]
     for root, name in ((config["model_path"], "config.json"),
                        (config["model_path"], "model.safetensors.index.json"),
@@ -106,8 +126,7 @@ def prepare_eval_run(config, inputs, *, resume):
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
     if previous["git_commit"] != commit:
         raise ValueError("evaluation resume requires the original project commit")
-    if config["generation"]["do_sample"]:
-        raise ValueError("evaluation resume currently supports greedy decoding only")
+    validate_seed_contract(config)
     append_metrics(root / "metrics.jsonl", {"event": "eval_resume", "git_commit": commit})
     return root
 
@@ -115,6 +134,8 @@ def prepare_eval_run(config, inputs, *, resume):
 def reject_invalidated_run(root):
     if (Path(root) / "invalidation.json").exists():
         raise ValueError("INVALIDATED_BY_GENERATION_CONTRACT: DO NOT RESUME or reuse this output directory")
+    if (Path(root) / "audit_status.json").exists():
+        raise ValueError("PAUSED_FOR_BASELINE_SEMANTICS_AUDIT: DO NOT RESUME or reuse this output directory")
 
 
 def validate_eval_health(health):
@@ -135,7 +156,8 @@ def main(argv=None) -> int:
         return 0
     # Validate existing results before loading any weights. No environment is replayed.
     if resume:
-        completed_rows(Path(config["output_dir"]) / "eval/episodes.jsonl", task_ids, config["scenario"])
+        completed_rows(Path(config["output_dir"]) / "eval/episodes.jsonl", task_ids, config["scenario"],
+                       base_seed=config["base_seed"])
     with TeacherEnvClient(config["endpoint"]) as env:
         health = env.health().payload
     validate_eval_health(health)
@@ -153,7 +175,8 @@ def main(argv=None) -> int:
     summary = evaluate_policy(policy=policy, scenario=config["scenario"], task_ids=task_ids,
                               env_factory=lambda: TeacherEnvClient(config["endpoint"]),
                               reward_alpha=config["reward_alpha"],
-                              max_action_steps=config["max_action_steps"], output_dir=root / "eval", resume=resume)
+                              max_action_steps=config["max_action_steps"], output_dir=root / "eval", resume=resume,
+                              base_seed=config["base_seed"], sampling_seed_strategy=config["sampling_seed_strategy"])
     append_metrics(root / "metrics.jsonl", {"event": "eval", **summary})
     print(json.dumps({"event": "summary", **summary}, ensure_ascii=False), flush=True)
     return 0

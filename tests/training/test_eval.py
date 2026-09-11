@@ -5,7 +5,8 @@ import pytest
 
 from env.teacher_env_client import TeacherEnvError
 from rewards.shopsim_reward import METRIC_KEYS
-from training.eval import evaluate_policy, load_task_ids
+from training.eval import (SAMPLING_SEED_STRATEGY, completed_rows, episode_seed,
+                           evaluate_policy, load_task_ids, seed_episode)
 from tests.training.test_rollout import FakeEnv, FakePolicy, step_payload
 
 
@@ -108,6 +109,138 @@ def test_cli_resume_identity_and_dry_run(tmp_path):
             script["validate_eval_health"]({**health, "task_split": split})
     script["validate_eval_health"]({**health, "task_split": "test"})
     (root / "invalidation.json").write_text('{"status":"INVALIDATED_BY_GENERATION_CONTRACT"}')
+    with pytest.raises(ValueError, match="DO NOT RESUME"):
+        script["main"](args + ["--resume"])
+
+
+def test_episode_seed_validation_and_cpu_rng():
+    import random
+    import numpy as np
+    import torch
+    assert [episode_seed(1, i) for i in range(3)] == [1, 2, 3]
+    for base, index in [(-1, 0), (1, -1), (True, 0), (1, 2**32 - 1)]:
+        with pytest.raises(ValueError, match="episode seed"):
+            episode_seed(base, index)
+    def draw():
+        return random.random(), float(np.random.random()), float(torch.rand(()))
+    seed_episode(2)
+    first, second = draw(), draw()
+    assert first != second
+    seed_episode(2)
+    assert (draw(), draw()) == (first, second)
+
+
+def test_sampled_uninterrupted_equals_interrupted_resume(tmp_path):
+    import random
+    import numpy as np
+    import torch
+
+    class SamplingPolicy:
+        last_usage = {"input_tokens": 10, "generated_tokens": 5}
+
+        def generate(self, messages):
+            draws = (random.random(), float(np.random.random()), float(torch.rand(())))
+            return f"Thought: {draws!r}\nAction: click[Buy]"
+
+    class InterruptedEnv(FakeEnv):
+        def step(self, *args, **kwargs):
+            # Interrupt after the incomplete episode has already consumed RNG.
+            raise KeyboardInterrupt()
+
+    def fresh_env():
+        return FakeEnv([step_payload("next"), step_payload("done", done=True, success=True)])
+
+    def run(path, factory, resume=False):
+        return evaluate_policy(policy=SamplingPolicy(), scenario="single", task_ids=["t1", "t2", "t3"],
+                               env_factory=factory, output_dir=path, resume=resume, base_seed=1)
+
+    full, resumed = tmp_path / "full", tmp_path / "resumed"
+    run(full, fresh_env)
+    envs = iter([fresh_env(), InterruptedEnv([])])
+    with pytest.raises(KeyboardInterrupt):
+        run(resumed, lambda: next(envs))
+    saved = (resumed / "episodes.jsonl").read_bytes()
+    seed_episode(999)  # A new process/model initialization need not preserve the old stream.
+    torch.rand(100)
+    summary = run(resumed, fresh_env, resume=True)
+    assert summary["episodes"] == 3
+    assert (resumed / "episodes.jsonl").read_bytes().startswith(saved)
+
+    def read(path, name):
+        return [json.loads(line) for line in (path / name).read_text().splitlines()]
+
+    for path in (full, resumed):
+        rows = read(path, "episodes.jsonl")
+        assert [(row["manifest_index"], row["episode_seed"]) for row in rows] == [(0, 1), (1, 2), (2, 3)]
+    for task in ("t2", "t3"):
+        uninterrupted = [r for r in read(full, "responses.jsonl") if r["task_id"] == task]
+        restarted = [r for r in read(resumed, "responses.jsonl") if r["task_id"] == task][-2:]
+        for key in ("visible_response", "manifest_index", "episode_seed", "turn"):
+            assert [r[key] for r in uninterrupted] == [r[key] for r in restarted]
+        assert restarted[0]["visible_response"] != restarted[1]["visible_response"]
+    with pytest.raises(ValueError, match="seed/manifest_index"):
+        completed_rows(resumed / "episodes.jsonl", ["t1", "t2", "t3"], "single", base_seed=2)
+    with pytest.raises(ValueError, match="sampling_seed_strategy"):
+        evaluate_policy(policy=SamplingPolicy(), scenario="single", task_ids=["t1"],
+                        env_factory=fresh_env, sampling_seed_strategy="global")
+
+
+def test_formal_config_and_sampled_resume_guards(tmp_path):
+    from copy import deepcopy
+    from pathlib import Path
+    import runpy
+    project = Path(__file__).resolve().parents[2]
+    script = runpy.run_path(str(project / "scripts/eval_policy.py"))
+    # Synthetic fixture only; the real frozen hash is checked by remote CLI dry-run.
+    manifest = tmp_path / "tasks.json"
+    tasks = [{"task_id": str(i), "scenario": "single", "official_split": "test"} for i in range(128)]
+    manifest.write_text(json.dumps({"tasks": tasks}))
+    import hashlib
+    script["FIXED_IDS_HASH"]["single"] = hashlib.sha256("\n".join(str(i) for i in range(128)).encode()).hexdigest()
+    for name in ("config.json", "model.safetensors.index.json", "tokenizer_config.json"):
+        (tmp_path / name).write_text("{}")
+    args = ["--config", str(project / "configs/training/eval_formal.yaml"), "--scenario", "single",
+            "--model-path", str(tmp_path), "--manifest", str(manifest), "--fixed-128",
+            "--output-dir", str(tmp_path / "formal")]
+    assert script["main"](args + ["--dry-run"]) == 0
+    assert not (tmp_path / "formal").exists()
+    config = script["parse_config"](args)
+    config.pop("resume"); config.pop("dry_run")
+    assert config["generation"] == {
+        "do_sample": True, "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0,
+        "max_new_tokens": 512, "max_context_tokens": 32768,
+        "chat_template_kwargs": {"enable_thinking": False}}
+    assert config["sampling_seed_strategy"] == SAMPLING_SEED_STRATEGY
+    assert config["base_seed"] == config["seed"] == 1
+    assert config["use_model_defaults"] is False
+    _, inputs = script["validate_inputs"](config)
+    root = script["prepare_eval_run"](config, inputs, resume=False)
+    for filename in ("config.json", "run_manifest.json"):
+        saved = json.loads((root / filename).read_text())
+        assert (saved if filename == "config.json" else saved["identity"]["config"]) == config
+    assert script["prepare_eval_run"](config, inputs, resume=True) == root
+    for key, value in [("base_seed", 2), ("seed", 2), ("sampling_seed_strategy", "global"),
+                       ("model_path", "/other"), ("adapter_path", "/other_adapter"),
+                       ("generation", {**config["generation"], "do_sample": False})]:
+        with pytest.raises(ValueError, match="identity"):
+            script["prepare_eval_run"]({**config, key: value}, inputs, resume=True)
+    for key in ("task_manifest_sha256", "task_ids_sha256", "model_config_sha256"):
+        with pytest.raises(ValueError, match="identity"):
+            script["prepare_eval_run"](config, {**inputs, key: "changed"}, resume=True)
+    for generation_key, value in [("do_sample", False), ("max_new_tokens", 1024), ("top_k", 0)]:
+        altered = deepcopy(config)
+        altered["generation"][generation_key] = value
+        with pytest.raises(ValueError, match="frozen non-thinking"):
+            script["validate_inputs"](altered)
+    for key, value in [("sampling_seed_strategy", "global"), ("use_model_defaults", True), ("base_seed", 2)]:
+        with pytest.raises(ValueError):
+            script["validate_inputs"]({**config, key: value})
+    previous = json.loads((root / "run_manifest.json").read_text())
+    previous["git_commit"] = "different-commit"
+    (root / "run_manifest.json").write_text(json.dumps(previous))
+    with pytest.raises(ValueError, match="original project commit"):
+        script["prepare_eval_run"](config, inputs, resume=True)
+    (root / "audit_status.json").write_text('{"status":"PAUSED_FOR_BASELINE_SEMANTICS_AUDIT"}')
     with pytest.raises(ValueError, match="DO NOT RESUME"):
         script["main"](args + ["--resume"])
 

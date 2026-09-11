@@ -3,9 +3,10 @@
 ## Final decision: formal sampling and task-local resume
 
 POLICY_OBSERVATION_PARITY: PASS. EVAL_DECODING: FROZEN.
-EVALUATOR_TASK_LOCAL_RNG: PASS. End-to-end SAMPLED_EVAL_RESUME_SAFE: NO pending
-the independently randomized TEST environment described below. The v3 command is
-prepared but HOLD: do not start it until that strict-reproducibility blocker is resolved.
+EVALUATOR_TASK_LOCAL_RNG: PASS. TEST_ENVIRONMENT_LOCAL_RNG: PASS.
+SAMPLED_EVAL_RESUME_SAFE: YES. SINGLE_128_V3_COMMAND_READY: YES, user-run only.
+The previously identified environment RNG blocker is resolved by the authorized
+TEST-only RNG scopes below. No model or formal evaluation was run to establish this.
 The audit/preparation sections below are historical; their REOPENED/candidate labels
 describe the earlier stage, not the current decision. Do not rerun those commands.
 
@@ -27,7 +28,7 @@ max_action_steps=30, seed=base_seed=1, reward_alpha=1 (strict).
 This is [PROJECT-FIXED] Qwen3 non-thinking recommended sampling, a project
 implementation choice, not paper-disclosed exact serving configuration.
 The unified policy already passes use_model_defaults=false. No policy, prompt,
-parser, environment, reward, SFT formatting or GRPO sampling changes are made here.
+parser, reward, SFT formatting or GRPO sampling changes are made here.
 GRPO remains temperature=1/top_p=1/top_k=0/G=8, independent stochastic exploration.
 
 The evaluator alone uses `sampling_seed_strategy=per_episode_manifest_index_v1`.
@@ -56,9 +57,49 @@ The service calls get_goals again for each reset. None of these remote-process R
 is controlled by evaluator set_seed. Thus matching policy draws alone cannot prove
 identical complete observations/rewards, even on identical hardware. Existing parity
 PASS is not contradicted: service and upstream share those semantics.
-No environment/price/reward fix has been attempted in this evaluator-only change.
-Minimal TEST-environment RNG control needs an explicit follow-up scope decision;
-do not claim strict end-to-end resume safety or start v3 before resolving it.
+At commit cbe17dd this correctly blocked strict resume. The subsequent authorized
+TEST-only implementation controls those draws without changing their distributions
+or reward definition; the original blocker is retained here as historical evidence.
+
+### TEST-only environment RNG resolution
+
+Formal config records `environment_rng_strategy=test_runtime_task_session_sha256_v1`.
+Service CLI requires `--task-split test --eval-seed 1`; TRAIN remains the default,
+rejects --eval-seed, does not import the TEST RNG helper, and follows its old RNG path.
+No deployed upstream/teacher checkout, TRAIN config, reward code or frozen task list
+is patched. The TEST service runs only from the controlled evaluation Git checkout.
+
+Seed derivation is SHA256 of compact ASCII JSON:
+`["test_runtime_task_session_sha256_v1", base_seed, scope, scenario, task_id]`.
+The full digest is interpreted as a big-endian integer for independent random.Random
+instances. Runtime uses scope="runtime", scenario/task=null; goals use scope="goal"
+with stable scenario/task_id; session steps use scope="session" with that same identity.
+Runtime price draws therefore do not depend on the first reset task, and goals do not
+depend on manifest position, session slot, reset count, prior tasks or service restarts.
+Different identity/scopes select different streams, not guaranteed unique individual
+numeric draws (collisions in discrete price choices are valid random outcomes).
+
+Upstream engine/goal/environment modules retain their original uniform/sample/shuffle
+calls. Only their `random` reference dispatches to a ContextVar-local Random inside
+TEST runtime/goal/session scopes. No process-global random.seed/getstate/setstate is
+used by production code. Nested goal construction restores the runtime scope; each
+session retains its own step RNG across turns, including special random search.
+Outside a TEST scope, dispatch uses the original module; existing environment locking
+is unchanged. Thread-local scope and per-session objects prevent cross-session draws.
+The RNG adapter is process-local; it never writes upstream files or alters distributions.
+
+Health and reset payloads add only non-policy metadata:
+`evaluation_rng={strategy: test_runtime_task_session_sha256_v1, formal_eval_seed: 1}`.
+The helper checks it, formal evaluator checks health before model loading, and its
+client checks every reset, releasing a mismatched session before failing. No client
+reset seed overrides the server deployment seed. TRAIN/GRPO clients retain default
+unchecked behavior. Formal config identity includes the environment RNG strategy;
+base_seed already covers the deployment seed, so incompatible resumes are rejected.
+
+Reproducibility requires identical catalog/order, upstream source, model/adapter,
+Python/library versions and GPU execution conditions. This removes the known policy
+and environment RNG restart dependence; it does not claim cross-platform bitwise GPU
+equivalence. The actual full runtime/model was deliberately not loaded in this round.
 
 Artifacts retained unchanged: v1 has INVALIDATED_BY_GENERATION_CONTRACT; v2 has
 PAUSED_FOR_BASELINE_SEMANTICS_AUDIT; both DO NOT RESUME. The Mode B run remains
@@ -67,8 +108,7 @@ below is eligible for formal resume. The evaluator rejects invalidation/audit ma
 
 ### Current user commands: A/B, then C
 
-Prepared commands, ON HOLD pending the environment RNG blocker above.
-Run on rtx-4 after resolving it and manually selecting GPU mode. At preparation, 5200 was stopped,
+Run on rtx-4 after manually selecting GPU mode. At preparation, 5200 was stopped,
 port free, and stale PID 1868 was absent. Only that dead pidfile was archived to
 `run/shop_env_test_5200.pid.stale-1868`; no process was signaled. The existing helper
 starts one TEST-only instance, never restarts a healthy owned instance, logs to
@@ -88,6 +128,8 @@ curl --fail --silent --show-error http://127.0.0.1:5200/health
 ```
 
 Require task_split=test and TEST-reset/release plus TRAIN/unknown rejection PASS.
+Also require evaluation_rng.strategy=test_runtime_task_session_sha256_v1 and
+evaluation_rng.formal_eval_seed=1. Helper start explicitly supplies --eval-seed 1.
 No model is loaded by A/B. C, user-run Single fixed-128 v3, no adapter:
 
 ```bash
@@ -161,6 +203,39 @@ and commit guards, formal config resolution and model-free CLI dry-run.
 No full training tests, model loading, GPU preflight or service/replay run.
 Compile, diff whitespace and changed-file secret checks pass;
 the deployed formal fixed-128 command is validated with --dry-run only.
+
+### Authorized environment RNG validation (no GPU)
+
+Remote resources were confirmed as 0.5 CPU / 2 GiB; no runtime/model load there.
+33 passed, 1 optional unrelated tokenizer-profile test skipped:
+
+```bash
+CUDA_VISIBLE_DEVICES='' HF_HUB_OFFLINE=1 PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+SHOPSIM_RNG_SOURCE=.cache/p6a-prep/rng-upstream \
+.cache/training-preflight-venv/bin/python -m pytest \
+  tests/env/test_evaluation_rng.py tests/env/test_eval_admission.py \
+  tests/env/test_remote_teacher_env_service.py tests/env/test_teacher_env_client.py \
+  tests/training/test_eval.py -q
+```
+
+Tests use selected AST function definitions read from deployed upstream source, not
+rewritten price/goal algorithms. Source-only copies are ignored local cache files:
+engine.py SHA256 `bb6fdac2b89143c6c69322bc5f6c4ef5b0f3964ff619a36eb2250f97a833352c`;
+goal.py SHA256 `70770af2f7318f58d2f5db064c425fdbca8bead78cdb8b64e81f644cefde2045`.
+The test fixture uses 160 tiny synthetic products to exercise upstream random search's
+150-result sampling, not 160 task rollouts. It runs only three synthetic task identities.
+No official task, Lucene, NLP, catalog or model is loaded. Non-random category/attribute
+reward subfunctions are stubbed; upstream goal/price generation and r_price formula
+execute unchanged. This is bounded RNG/protocol validation, not another parity audit.
+
+Fresh OS child processes host Flask test clients on pipes, without listening ports.
+Assertions cover repeated task resets; cold/warm order reversal; full goal and runtime
+price equality after process stop/restart; distinct task/seed streams; interleaved
+session search sequences; unchanged process-global RNG; nested/threaded scope isolation;
+unchanged TRAIN fallback; Single/Persona admission; wrong-seed health/reset rejection;
+and interrupted fake evaluator plus service process restart/resume matching every
+subsequent observation, reward-relevant state, reward metric, action and episode seed.
+Compile/diff/secret checks and remote formal CLI --dry-run complete the validation.
 
 ## Verdict and scope
 

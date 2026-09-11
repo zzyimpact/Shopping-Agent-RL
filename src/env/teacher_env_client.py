@@ -25,10 +25,12 @@ class EnvResult:
 class TeacherEnvClient:
     def __init__(self, base_url: str = "http://127.0.0.1:5500", *, timeout: float = 60.0,
                  client: httpx.Client | None = None,
-                 expected_environment_version: str | None = "task-scoped-v3-multisession"):
+                 expected_environment_version: str | None = "task-scoped-v3-multisession",
+                 expected_evaluation_rng: Mapping[str, Any] | None = None):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)
         self.expected_environment_version = expected_environment_version
+        self.expected_evaluation_rng = expected_evaluation_rng
 
     def close(self) -> None:
         self.client.close()
@@ -66,6 +68,11 @@ class TeacherEnvClient:
 
     def reset(self, scenario: str, task_id: str) -> EnvResult:
         result = self._request("POST", "/reset", {"scenario": scenario, "task_id": task_id})
+        if (self.expected_evaluation_rng is not None
+                and result.payload.get("evaluation_rng") != self.expected_evaluation_rng):
+            if result.payload.get("session_id"):
+                self.release(result.payload["session_id"])
+            raise TeacherEnvError("ShopSimulator evaluation RNG contract mismatch", kind="infrastructure")
         if result.payload.get("task_id") != str(task_id) or result.payload.get("scenario") != scenario:
             raise TeacherEnvError("ShopSimulator session identity mismatch after reset", kind="infrastructure")
         if (self.expected_environment_version is not None and

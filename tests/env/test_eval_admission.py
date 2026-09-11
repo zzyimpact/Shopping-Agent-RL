@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import random
 import sys
 import types
 
@@ -48,17 +49,22 @@ def service(monkeypatch, tmp_path):
             pass
     fake = types.ModuleType("web_agent_site.envs.web_agent_text_env")
     fake.get_goals, fake.WebAgentTextEnv = goals, FakeEnv
-    for name in ("web_agent_site", "web_agent_site.envs"):
+    fake.random = random
+    for name in ("web_agent_site", "web_agent_site.envs", "web_agent_site.engine"):
         package = types.ModuleType(name)
         package.__path__ = []
         monkeypatch.setitem(sys.modules, name, package)
     monkeypatch.setitem(sys.modules, fake.__name__, fake)
     from tests.env.test_remote_teacher_env_service import _install_parser_modules
     _install_parser_modules(monkeypatch)
+    sys.modules["web_agent_site.engine.engine"].random = random
+    goal_module = types.ModuleType("web_agent_site.engine.goal")
+    goal_module.random = random
+    monkeypatch.setitem(sys.modules, goal_module.__name__, goal_module)
     monkeypatch.setattr(module, "_system_prompt_for", lambda scenario: ("shop prompt", "fixture"))
     monkeypatch.setattr(module, "settings", {"catalog": "fixture", "search_root": "fixture",
                         "source_fingerprint": "fixture", "server": server, "original_get_goals": goals,
-                        "train_ids": pools["train"], "test_ids": pools["test"]})
+                        "train_ids": pools["train"], "test_ids": pools["test"], "formal_eval_seed": 1})
     return module, tmp_path
 
 
@@ -103,6 +109,15 @@ def test_default_train_and_cli_rejects_union(service, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["service", "--task-split", "both"])
     with pytest.raises(SystemExit):
         module.main()
+    for argv in (["--task-split", "test"], ["--eval-seed", "1"],
+                 ["--task-split", "test", "--eval-seed", "-1"]):
+        monkeypatch.setattr(sys, "argv", ["service", *argv])
+        with pytest.raises(SystemExit):
+            module.main()
+    monkeypatch.setattr(sys, "argv", ["service", "--manifests", str(path),
+                                      "--task-split", "test", "--eval-seed", "1"])
+    module.main()
+    assert module.settings["formal_eval_seed"] == 1
 
 
 def test_split_manifest_integrity(service):
@@ -119,7 +134,7 @@ def test_split_manifest_integrity(service):
 
 def test_lifecycle_command_and_pid_ownership(tmp_path, monkeypatch):
     from scripts import eval_env
-    assert eval_env.service_command()[-6:] == ["--port", "5200", "--task-split", "test", "--manifests", str(eval_env.MANIFESTS)]
+    assert eval_env.service_command()[-8:] == ["--port", "5200", "--task-split", "test", "--manifests", str(eval_env.MANIFESTS), "--eval-seed", "1"]
     saved = {"pid": 42, "starttime": "123", "argv": eval_env.service_command()}
     path = tmp_path / "pid"
     path.write_text(json.dumps(saved))

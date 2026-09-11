@@ -27,7 +27,7 @@ INTERPRETER = "/root/miniconda3/bin/python"
 def service_command():
     return [INTERPRETER, "-u", str(ROOT / "scripts/remote_teacher_env_service.py"),
             "--host", "127.0.0.1", "--port", "5200", "--task-split", "test",
-            "--manifests", str(MANIFESTS)]
+            "--manifests", str(MANIFESTS), "--eval-seed", "1"]
 
 
 def require_pidfd():
@@ -48,7 +48,9 @@ def request(path, body=None, timeout=120):
 def health():
     code, body = request("/health", timeout=3)
     if code != 200 or body.get("status") != "ok" or body.get("task_split") != "test" or (
-            body.get("environment_version") != "task-scoped-v3-multisession"):
+            body.get("environment_version") != "task-scoped-v3-multisession"
+            or body.get("evaluation_rng") != {"strategy": "test_runtime_task_session_sha256_v1",
+                                              "formal_eval_seed": 1}):
         raise RuntimeError(f"not a compatible TEST service: {body}")
     return body
 
@@ -137,7 +139,9 @@ def check():
         code, body = request("/reset", {"scenario": scenario, "task_id": test_id})
         session = body.get("session_id")
         try:
-            if code != 200 or not session or body.get("task_id") != test_id or body.get("scenario") != scenario:
+            if (code != 200 or not session or body.get("task_id") != test_id or body.get("scenario") != scenario
+                    or body.get("evaluation_rng") != {"strategy": "test_runtime_task_session_sha256_v1",
+                                                       "formal_eval_seed": 1}):
                 raise RuntimeError(f"TEST reset failed: HTTP {code}: {body}")
         finally:
             if session:

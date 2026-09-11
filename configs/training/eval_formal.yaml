@@ -4,6 +4,7 @@ use_model_defaults: false
 seed: 1
 base_seed: 1
 sampling_seed_strategy: per_episode_manifest_index_v1
+environment_rng_strategy: test_runtime_task_session_sha256_v1
 max_action_steps: 30
 reward_alpha: 1.0
 generation:

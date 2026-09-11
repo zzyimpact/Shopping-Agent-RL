@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from env.teacher_env_client import TeacherEnvClient
+from env.evaluation_rng import ENVIRONMENT_RNG_STRATEGY, rng_contract
 from training.eval import (SAMPLING_SEED_STRATEGY, completed_rows, episode_seed,
                            evaluate_policy, load_task_ids)
 from training.policy import GenerationConfig, QwenPolicy
@@ -100,6 +101,7 @@ def validate_inputs(config):
     if config.get("formal_evaluation"):
         if (config["seed"] != 1 or config["max_action_steps"] != 30
                 or config["generation"] != FORMAL_GENERATION or config["reward_alpha"] != 1.0
+                or config.get("environment_rng_strategy") != ENVIRONMENT_RNG_STRATEGY
                 or config.get("diagnostic_only") or config.get("merge_into_formal_results") is False):
             raise ValueError("formal evaluation requires frozen non-thinking sampling/512/32768, seed=1, 30 steps, strict reward")
     tokenizer = config["tokenizer_path"] or config["model_path"]
@@ -138,11 +140,13 @@ def reject_invalidated_run(root):
         raise ValueError("PAUSED_FOR_BASELINE_SEMANTICS_AUDIT: DO NOT RESUME or reuse this output directory")
 
 
-def validate_eval_health(health):
+def validate_eval_health(health, *, base_seed=None):
     if health.get("environment_version") != "task-scoped-v3-multisession":
         raise ValueError("incompatible environment protocol")
     if health.get("status") != "ok" or health.get("task_split") != "test":
         raise ValueError("evaluation requires a healthy explicit TEST-only endpoint; use port 5200")
+    if base_seed is not None and health.get("evaluation_rng") != rng_contract(base_seed):
+        raise ValueError("evaluation endpoint RNG strategy/base seed mismatch")
 
 
 def main(argv=None) -> int:
@@ -160,7 +164,7 @@ def main(argv=None) -> int:
                        base_seed=config["base_seed"])
     with TeacherEnvClient(config["endpoint"]) as env:
         health = env.health().payload
-    validate_eval_health(health)
+    validate_eval_health(health, base_seed=config["base_seed"] if config.get("formal_evaluation") else None)
     print(json.dumps({"event": "environment_health", "health": health}), flush=True)
     import torch
     from transformers import set_seed
@@ -173,7 +177,8 @@ def main(argv=None) -> int:
                        adapter_path=config["adapter_path"], generation=GenerationConfig(**config["generation"]),
                        device_map={"": 0})
     summary = evaluate_policy(policy=policy, scenario=config["scenario"], task_ids=task_ids,
-                              env_factory=lambda: TeacherEnvClient(config["endpoint"]),
+                              env_factory=lambda: TeacherEnvClient(config["endpoint"], expected_evaluation_rng=(
+                                  rng_contract(config["base_seed"]) if config.get("formal_evaluation") else None)),
                               reward_alpha=config["reward_alpha"],
                               max_action_steps=config["max_action_steps"], output_dir=root / "eval", resume=resume,
                               base_seed=config["base_seed"], sampling_seed_strategy=config["sampling_seed_strategy"])

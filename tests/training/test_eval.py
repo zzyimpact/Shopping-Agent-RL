@@ -213,6 +213,13 @@ def test_formal_config_and_sampled_resume_guards(tmp_path):
     assert config["sampling_seed_strategy"] == SAMPLING_SEED_STRATEGY
     assert config["base_seed"] == config["seed"] == 1
     assert config["use_model_defaults"] is False
+    from env.evaluation_rng import ENVIRONMENT_RNG_STRATEGY, rng_contract
+    assert config["environment_rng_strategy"] == ENVIRONMENT_RNG_STRATEGY
+    health = {"status": "ok", "environment_version": "task-scoped-v3-multisession", "task_split": "test"}
+    for actual in (None, rng_contract(2), {"strategy": "old", "formal_eval_seed": 1}):
+        with pytest.raises(ValueError, match="RNG strategy/base seed"):
+            script["validate_eval_health"]({**health, "evaluation_rng": actual}, base_seed=1)
+    script["validate_eval_health"]({**health, "evaluation_rng": rng_contract(1)}, base_seed=1)
     _, inputs = script["validate_inputs"](config)
     root = script["prepare_eval_run"](config, inputs, resume=False)
     for filename in ("config.json", "run_manifest.json"):

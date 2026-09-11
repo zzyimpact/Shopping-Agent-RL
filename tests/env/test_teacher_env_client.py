@@ -60,3 +60,25 @@ def test_environment_version_mismatch_is_infrastructure():
     with TeacherEnvClient(client=raw) as client, pytest.raises(TeacherEnvError) as caught:
         client.reset("single", "t1")
     assert caught.value.kind == "infrastructure"
+
+
+@pytest.mark.parametrize("reported_seed", [None, 2, 1])
+def test_eval_rng_contract_checked_on_reset_and_mismatch_released(reported_seed):
+    from env.evaluation_rng import rng_contract
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        body = {"session_id": "s1", "task_id": "t1", "scenario": "single",
+                "environment_version": "task-scoped-v3-multisession"}
+        if reported_seed is not None:
+            body["evaluation_rng"] = rng_contract(reported_seed)
+        return httpx.Response(200, request=request, json=body)
+    raw = httpx.Client(transport=httpx.MockTransport(handler))
+    with TeacherEnvClient(client=raw, expected_evaluation_rng=rng_contract(1)) as client:
+        if reported_seed == 1:
+            client.reset("single", "t1")
+            assert calls == ["/reset"]
+        else:
+            with pytest.raises(TeacherEnvError, match="RNG contract"):
+                client.reset("single", "t1")
+            assert calls == ["/reset", "/release"]

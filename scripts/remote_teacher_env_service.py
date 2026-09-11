@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -46,6 +47,30 @@ sessions: dict[str, dict[str, object]] = {}
 environment_lock = threading.RLock()
 MAX_SESSIONS = 32
 ENVIRONMENT_VERSION = "task-scoped-v3-multisession"
+
+
+def _rng_scope(rng):
+    if rng is None:
+        return nullcontext()
+    from env.evaluation_rng import upstream_rng_scope
+    import web_agent_site.engine.engine as engine
+    import web_agent_site.engine.goal as goal
+    import web_agent_site.envs.web_agent_text_env as env_module
+    return upstream_rng_scope(rng, (engine, goal, env_module))
+
+
+def _test_rng(scope, scenario=None, task_id=None):
+    if settings.get("task_split", "train") != "test":
+        return None
+    from env.evaluation_rng import local_rng
+    return local_rng(settings["formal_eval_seed"], scope, scenario, task_id)
+
+
+def _rng_metadata():
+    if settings.get("task_split", "train") != "test":
+        return {}
+    from env.evaluation_rng import rng_contract
+    return {"evaluation_rng": rng_contract(settings["formal_eval_seed"])}
 
 
 def _extract_yaml_system_prompt(path: Path) -> str:
@@ -196,6 +221,7 @@ def health():
         "policy_observation_version": POLICY_OBSERVATION_VERSION,
         "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
         "active_sessions": len(sessions), "max_sessions": int(settings.get("max_sessions", MAX_SESSIONS)),
+        **_rng_metadata(),
         **metrics,
         })
 
@@ -219,21 +245,28 @@ def reset():
         try:
             import web_agent_site.envs.web_agent_text_env as env_module
             original_get_goals = settings.get("original_get_goals") or env_module.get_goals
+            goal_rng = _test_rng("goal", scenario, task_id)
+            session_rng = _test_rng("session", scenario, task_id)
+
+            def task_goals(products, prices, if_persona=False):
+                with _rng_scope(goal_rng):
+                    return original_get_goals(products, prices, if_persona=if_persona)
 
             def current_task_goal(products, prices, if_persona=False):
                 selected = [product for product in products if str(product.get("asin")) == task_id]
                 if len(selected) != 1:
                     raise RuntimeError(f"task product not unique: {task_id}")
-                return original_get_goals(selected, {task_id: prices[task_id]}, if_persona=if_persona)
+                return task_goals(selected, {task_id: prices[task_id]}, if_persona=if_persona)
 
             server = settings.get("server")
             if server is None:
                 env_module.get_goals = current_task_goal
                 try:
-                    env = env_module.WebAgentTextEnv(
-                        observation_mode="text", file_path=str(settings["catalog"]),
-                        if_persona=scenario == "single_persona",
-                    )
+                    with _rng_scope(_test_rng("runtime")):
+                        env = env_module.WebAgentTextEnv(
+                            observation_mode="text", file_path=str(settings["catalog"]),
+                            if_persona=scenario == "single_persona",
+                        )
                 finally:
                     env_module.get_goals = original_get_goals
                 server = env.server
@@ -244,23 +277,25 @@ def reset():
                 product = server.product_item_dict.get(task_id)
                 if product is None:
                     return jsonify({"error": "task product absent from Catalog-Fine"}), 500
-                goal = original_get_goals(
+                goal = task_goals(
                     [product], {task_id: server.product_prices[task_id]},
                     if_persona=scenario == "single_persona",
                 )[0]
                 server.goals = _goal_slots(goal, int(slot))
                 server.user_sessions.pop(slot, None)
                 server.user_sessions.pop(str(slot), None)
-                env = env_module.WebAgentTextEnv(
-                    observation_mode="text", server=server,
-                    if_persona=scenario == "single_persona",
-                )
+                with _rng_scope(session_rng):
+                    env = env_module.WebAgentTextEnv(
+                        observation_mode="text", server=server,
+                        if_persona=scenario == "single_persona",
+                    )
             session_id = uuid.uuid4().hex
             session = {"env": env, "session_id": session_id, "task_id": task_id,
-                       "scenario": scenario, "slot": int(slot), "goal": goal}
+                       "scenario": scenario, "slot": int(slot), "goal": goal, "rng": session_rng}
             sessions[session_id] = session
             _bind_server_slot(session)
-            observation, _ = env.reset(idx=int(slot))
+            with _rng_scope(session_rng):
+                observation, _ = env.reset(idx=int(slot))
             # single_eval supplies the policy prompt from its scenario YAML.
             # Do not silently substitute the environment template.
             system_prompt, prompt_source = _system_prompt_for(scenario)
@@ -301,6 +336,7 @@ def reset():
                 "policy_observation_version": POLICY_OBSERVATION_VERSION,
                 "profiler_protocol_version": PROFILER_PROTOCOL_VERSION,
                 "reward_deviation_version": "query-match-false-v1",
+                **_rng_metadata(),
             })
         except Exception as exc:
             if 'session_id' in locals() and session_id in sessions:
@@ -346,7 +382,8 @@ def step():
                 return jsonify({"error": "malformed_action"}), 422
             action_valid = ((action_name == "search" and bool(action_arg)) or
                             (action_name == "click" and normalized_arg != "search" and normalized_arg in clickable_before))
-            observation, status, _ = env.step(action)
+            with _rng_scope(session.get("rng")):
+                observation, status, _ = env.step(action)
             available_after = env.get_available_actions()
             instruction_simple = str(getattr(env, "instruction_simple", ""))
             policy_observation = build_step_policy_observation(
@@ -388,9 +425,18 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5100, type=int)
     parser.add_argument("--task-split", choices=("train", "test"), default="train")
+    parser.add_argument("--eval-seed", type=int, help="required TEST-only formal evaluation base seed")
     parser.add_argument("--source-fingerprint", default="unknown")
     parser.add_argument("--max-sessions", default=MAX_SESSIONS, type=int)
     args = parser.parse_args()
+    if args.task_split == "test":
+        from env.evaluation_rng import rng_contract
+        try:
+            rng_contract(args.eval_seed)
+        except ValueError as exc:
+            parser.error(str(exc))
+    elif args.eval_seed is not None:
+        parser.error("--eval-seed is TEST-only; TRAIN RNG semantics are unchanged")
     pools = load_admission(args.manifests)
     upstream_root = Path(os.environ.get("UPSTREAM_ROOT", "/root/ShopSimulator"))
     sys.path[:0] = [str(upstream_root / "shop_env"), str(upstream_root / "shop_env/shop_env")]
@@ -401,6 +447,7 @@ def main() -> None:
         "source_fingerprint": args.source_fingerprint,
         "max_sessions": max(1, min(int(args.max_sessions), MAX_SESSIONS)),
         "task_split": args.task_split,
+        "formal_eval_seed": args.eval_seed,
         "train_ids": pools["train"], "test_ids": pools["test"],
     })
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)

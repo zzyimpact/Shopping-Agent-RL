@@ -5,6 +5,8 @@ reward_alpha: 1.0
 endpoint: http://127.0.0.1:5500
 train_task_manifest: null
 sft_run_dir: null
+training_seed_strategy: global_seed_schedule_v1
+use_model_defaults: false
 grpo:
   loss_type: grpo
   num_generations: 8
@@ -13,11 +15,12 @@ grpo:
   learning_rate: 1.0e-6
   task_groups_per_update: 32
   max_steps: 200
-  per_device_train_batch_size: null  # GPU-PREFLIGHT; accumulation derived from G * groups.
-  lora_r: null
-  lora_alpha: null
-  target_modules: null
-  save_steps: 10
+  per_device_train_batch_size: 1
+  lora_r: 8
+  lora_alpha: 16
+  lora_dropout: 0.0
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  save_steps: 20
   logging_steps: 1
 sampling:
   chat_template_kwargs:
@@ -25,5 +28,7 @@ sampling:
   do_sample: true
   temperature: 1.0  # Initial project choice, not an optimized/frozen GPU setting.
   top_p: 1.0
+  top_k: 0
+  min_p: 0.0
   max_new_tokens: 512
   max_context_tokens: 32768

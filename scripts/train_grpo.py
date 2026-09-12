@@ -21,6 +21,23 @@ from training.policy import GenerationConfig
 from training.runtime import json_hash, model_metadata, prepare_run, sha256_file
 
 
+def validate_train_endpoint(endpoint: str) -> dict:
+    """Reject accidental TEST/unknown ShopEnv endpoints before model load."""
+    client = TeacherEnvClient(endpoint)
+    try:
+        health = client.health().payload
+    finally:
+        client.close()
+    required = {
+        "status": "ok",
+        "task_split": "train",
+        "environment_version": "task-scoped-v3-multisession",
+    }
+    if any(health.get(key) != value for key, value in required.items()):
+        raise ValueError(f"GRPO requires TRAIN ShopEnv endpoint; got health={health}")
+    return {key: health[key] for key in required}
+
+
 def parse_config(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="small YAML override of configs/training/grpo.yaml")
@@ -64,6 +81,14 @@ def parse_config(argv=None):
     sampling = GenerationConfig(**config["sampling"])
     if not sampling.do_sample:
         parser.error("GRPO requires stochastic sampling")
+    if (sampling.temperature != 1.0 or sampling.top_p != 1.0
+            or sampling.top_k not in (0, None) or sampling.min_p not in (0.0, None)
+            or sampling.max_new_tokens != 512 or sampling.max_context_tokens != 32768):
+        parser.error("formal GRPO sampling is fixed to non-thinking temperature=1/top_p=1/top_k=0/min_p=0/512/32768")
+    if config.get("use_model_defaults") is not False:
+        parser.error("GRPO requires use_model_defaults=false")
+    if config.get("training_seed_strategy") != "global_seed_schedule_v1":
+        parser.error("unsupported GRPO training seed strategy")
     return config, spec, resume
 
 
@@ -76,6 +101,8 @@ def main(argv=None) -> int:
     inputs = {"train_task_manifest_sha256": sha256_file(config["train_task_manifest"]),
               "task_schedule_sha256": json_hash(schedule), "scheduled_groups": len(schedule),
               "token_contract": "qwen-append-only-sampled-ids-v1", "trl_contract": "1.12.0",
+              "config_sha256": json_hash(config),
+              "train_endpoint_health": validate_train_endpoint(config["endpoint"]),
               "lineage": validate_lineage(config), **model_metadata(config["model_path"], tokenizer_path)}
     root = prepare_run(config["output_dir"], config=config, inputs=inputs, resume_from_checkpoint=resume)
     try:

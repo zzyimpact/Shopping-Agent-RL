@@ -17,6 +17,7 @@ from training.grpo import (
     initialize_grpo_model, load_grpo_config, metadata_bridge, rollout_reward,
     shop_trainer_class, task_dataset_rows, task_schedule, train_grpo, validate_lineage,
 )
+import scripts.train_grpo as train_grpo_script
 from training.policy import GenerationConfig, PolicySample, QwenPolicy
 from training.rollout import AgentRollout
 from tests.training.test_rollout import FakeEnv, step_payload
@@ -46,6 +47,57 @@ class SamplingPolicy:
         assert sampling.do_sample
         self.inputs.append(list(input_ids))
         return next(self.samples)
+
+
+def test_grpo_context_window_cap_is_terminal_and_not_sent_to_env():
+    class CappedPolicy(SamplingPolicy):
+        def prompt_token_ids(self, messages, sampling):
+            return [10, 11]
+
+        def sample(self, input_ids, *, sampling):
+            return PolicySample("Thought: partial\nAction: click[Buy]", [90, 91], [-0.2, -0.3],
+                                context_window_cap=True, input_tokens=98,
+                                effective_max_new_tokens=2, remaining_context_tokens=2)
+
+    env = FakeEnv([step_payload("must not be reached", done=True, success=True)])
+    episode = AgentRollout(
+        policy=CappedPolicy([]), env_factory=lambda: env, scenario="single", max_action_steps=2,
+    ).run("context-task", sampling=GenerationConfig(do_sample=True, max_new_tokens=8,
+                                                      max_context_tokens=100))
+    assert episode.status == "context_limit"
+    assert episode.context_limit_at_step == 1
+    assert episode.final_input_tokens == 98
+    assert episode.remaining_context_tokens == 2
+    assert env.responses == []
+
+
+def test_train_endpoint_health_requires_train_split(monkeypatch):
+    class FakeClient:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        def health(self):
+            return SimpleNamespace(payload={
+                "status": "ok", "task_split": "test",
+                "environment_version": "task-scoped-v3-multisession",
+            })
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(train_grpo_script, "TeacherEnvClient", FakeClient)
+    with pytest.raises(ValueError, match="TRAIN ShopEnv endpoint"):
+        train_grpo_script.validate_train_endpoint("http://127.0.0.1:5200")
+
+    class TrainClient(FakeClient):
+        def health(self):
+            return SimpleNamespace(payload={
+                "status": "ok", "task_split": "train",
+                "environment_version": "task-scoped-v3-multisession",
+            })
+
+    monkeypatch.setattr(train_grpo_script, "TeacherEnvClient", TrainClient)
+    assert train_grpo_script.validate_train_endpoint("http://127.0.0.1:5500")["task_split"] == "train"
 
 
 def sample(text=BUY, ids=(90, 99), probs=(-0.2, -0.4)):
@@ -272,7 +324,9 @@ def test_sampling_uses_backend_ids_and_normalized_transition_scores(monkeypatch,
     policy = QwenPolicy(model=Model(), tokenizer=Tokenizer())
     actual = policy.sample([10, 11], sampling=GenerationConfig(
         do_sample=True, max_context_tokens=5, max_new_tokens=4, temperature=temperature, top_p=top_p))
-    assert actual == PolicySample(BUY, [4321, 9876, 200001], [-0.25, -0.75, -1.25])
+    assert actual == PolicySample(BUY, [4321, 9876, 200001], [-0.25, -0.75, -1.25],
+                                  input_tokens=2, effective_max_new_tokens=3,
+                                  remaining_context_tokens=3, eos_reached=True)
     assert policy.last_usage == {"input_tokens": 2, "generated_tokens": 3}
     with pytest.raises(ValueError, match="stochastic"):
         policy.sample([10, 11], sampling=GenerationConfig())

@@ -108,6 +108,15 @@ class AgentRollout:
                         episode.status = "context_limit"
                         break
                     response = sample.text
+                    if sample.context_window_cap:
+                        episode.status = "context_limit"
+                        episode.context_limit_at_step = episode.steps + 1
+                        episode.final_input_tokens = sample.input_tokens
+                        episode.remaining_context_tokens = sample.remaining_context_tokens
+                        if response:
+                            episode.visible_responses.append(response)
+                            episode.messages.append({"role": "assistant", "content": response})
+                        break  # Never parse/send a context-truncated GRPO action.
                 episode.generation_time_s += time.monotonic() - tick
                 # The generate path exposes hard-window outcomes; GRPO's separate
                 # token-trace/sample path keeps its existing semantics.

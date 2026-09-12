@@ -15,6 +15,15 @@ def test_eval_and_grpo_resolved_contract():
     assert evaluation["chat_template_kwargs"] == sampling["chat_template_kwargs"] == {"enable_thinking": False}
     assert not evaluation["do_sample"] and evaluation["max_new_tokens"] == 512
     assert sampling["do_sample"] and sampling["temperature"] == sampling["top_p"] == 1
+    assert sampling["top_k"] == 0 and sampling["min_p"] == 0.0
+    config = load_grpo_config()
+    assert config["use_model_defaults"] is False
+    assert config["training_seed_strategy"] == "global_seed_schedule_v1"
+    assert config["grpo"]["per_device_train_batch_size"] == 1
+    assert config["grpo"]["lora_r"] == 8 and config["grpo"]["lora_alpha"] == 16
+    assert config["grpo"]["lora_dropout"] == 0.0
+    assert config["grpo"]["target_modules"] == ["q_proj", "k_proj", "v_proj", "o_proj"]
+    assert config["grpo"]["save_steps"] == 20
 
 
 @pytest.mark.skipif(not os.environ.get("QWEN_TOKENIZER_PATH"), reason="tokenizer-only opt-in")

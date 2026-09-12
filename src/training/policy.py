@@ -251,8 +251,19 @@ class QwenPolicy:
                 output.sequences, output.scores, normalize_logits=True,
             )[0].float().cpu().tolist()
         self.last_usage = {"input_tokens": len(input_ids), "generated_tokens": len(generated)}
-        return PolicySample(self.tokenizer.decode(generated, skip_special_tokens=True).strip(),
-                            generated, scores)
+        eos_ids = self.tokenizer.eos_token_id
+        eos_ids = eos_ids if isinstance(eos_ids, list) else [eos_ids]
+        ended_with_eos = bool(generated and generated[-1] in eos_ids)
+        effective = min(sampling.max_new_tokens, remaining)
+        return PolicySample(
+            self.tokenizer.decode(generated, skip_special_tokens=True).strip(),
+            generated, scores,
+            context_window_cap=(effective < sampling.max_new_tokens
+                                 and len(generated) >= effective
+                                 and not ended_with_eos),
+            input_tokens=len(input_ids), effective_max_new_tokens=effective,
+            remaining_context_tokens=remaining, eos_reached=ended_with_eos,
+        )
 
 
 @dataclass(frozen=True)
@@ -262,6 +273,11 @@ class PolicySample:
     text: str
     token_ids: list[int]
     logprobs: list[float]
+    context_window_cap: bool = False
+    input_tokens: int | None = None
+    effective_max_new_tokens: int | None = None
+    remaining_context_tokens: int | None = None
+    eos_reached: bool = False
 
     def __post_init__(self) -> None:
         import math

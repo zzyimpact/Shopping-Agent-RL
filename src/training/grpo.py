@@ -29,6 +29,7 @@ class GRPOSpec:
     per_device_train_batch_size: int | None = None
     lora_r: int | None = None
     lora_alpha: int | None = None
+    lora_dropout: float = 0.0
     target_modules: list[str] | None = None
     save_steps: int = 10
     logging_steps: int = 1
@@ -49,6 +50,8 @@ class GRPOSpec:
         if init == "base" and (not self.lora_r or self.lora_r < 1 or not self.lora_alpha
                                or self.lora_alpha < 1 or not self.target_modules):
             raise ValueError("Direct GRPO requires explicit fresh LoRA settings (GPU-PREFLIGHT)")
+        if not 0.0 <= self.lora_dropout < 1.0:
+            raise ValueError("LoRA dropout must be in [0, 1)")
 
     @property
     def generation_batch_size(self) -> int:
@@ -136,6 +139,15 @@ def rollout_metrics(episodes, group_size: int) -> dict[str, Any]:
         "malformed_rate": sum(ep.status == "malformed_action" for ep in episodes) / count,
         "context_limit_rate": sum(ep.status == "context_limit" for ep in episodes) / count,
         "generated_policy_tokens": sum(sum(ep.token_trace.env_mask) for ep in episodes),
+        "generated_tokens": sum((ep.generated_tokens or 0) for ep in episodes),
+        "generation_wall_s": sum(ep.generation_time_s for ep in episodes),
+        "environment_wait_s": sum(ep.environment_wait_s for ep in episodes),
+        "generated_tokens_per_second": (
+            sum((ep.generated_tokens or 0) for ep in episodes) /
+            sum(ep.generation_time_s for ep in episodes)
+            if sum(ep.generation_time_s for ep in episodes) else None),
+        "trajectories_per_hour": count / sum(ep.wall_time_s for ep in episodes) * 3600
+            if sum(ep.wall_time_s for ep in episodes) else None,
         "rollout_wall_s": sum(ep.wall_time_s for ep in episodes),
     }
 
@@ -241,12 +253,14 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory, use_cp
         dataloader_pin_memory=not use_cpu,
         report_to="none", log_completions=False, save_only_model=False, eval_strategy="no",
         save_strategy="steps", save_steps=spec.save_steps, logging_steps=spec.logging_steps,
-        optim="adamw_torch", warmup_ratio=0.0, epsilon=0.2, max_grad_norm=1.0,
+        optim="adamw_torch", lr_scheduler_type="linear", warmup_ratio=0.0,
+        adam_beta1=0.9, adam_beta2=0.999, adam_epsilon=1e-8, weight_decay=0.0,
+        epsilon=0.2, max_grad_norm=1.0,
     )
     peft = None
     if config["init"] == "base":
         peft = LoraConfig(r=spec.lora_r, lora_alpha=spec.lora_alpha, target_modules=spec.target_modules,
-                          lora_dropout=0.0, task_type="CAUSAL_LM")
+                          lora_dropout=spec.lora_dropout, task_type="CAUSAL_LM")
 
     def rollout(prompts, trainer):
         # Always unwrap the CURRENT trainer policy, including after checkpoint restore/update.
@@ -267,15 +281,21 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory, use_cp
         def on_step_begin(self, args, state, control, **kwargs):
             self.started = time.monotonic()
             trainer._shop_rollout_seconds = 0.0
+            if args.device.type == "cuda":
+                import torch
+                torch.cuda.reset_peak_memory_stats()
 
         def on_step_end(self, args, state, control, **kwargs):
+            update_wall = max(0.0, time.monotonic() - self.started - trainer._shop_rollout_seconds)
             metrics = {
                 "event": "update", "step": state.global_step,
-                "update_wall_s": max(0.0, time.monotonic() - self.started - trainer._shop_rollout_seconds),
+                "update_wall_s": update_wall,
+                "optimizer_update_wall_s": update_wall,
             }
             if args.device.type == "cuda":
                 import torch
                 metrics["gpu_peak_allocated_bytes"] = torch.cuda.max_memory_allocated()
+                metrics["peak_vram_bytes"] = metrics["gpu_peak_allocated_bytes"]
             append_metrics(output / "metrics.jsonl", metrics)
 
         def on_log(self, args, state, control, logs=None, **kwargs):

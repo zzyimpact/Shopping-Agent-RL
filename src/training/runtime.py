@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 from typing import Any, Mapping
@@ -57,6 +58,7 @@ def append_metrics(path: str | Path, values: Mapping[str, Any]) -> None:
 def prepare_run(
     output_dir: str | Path, *, config: Mapping[str, Any], inputs: Mapping[str, Any],
     resume_from_checkpoint: str | Path | None = None,
+    allow_admission_extension: bool = False,
 ) -> Path:
     """Record identity once; HF owns checkpoint contents, optimizer and RNG restore."""
     root = Path(output_dir).resolve()
@@ -70,7 +72,31 @@ def prepare_run(
             raise ValueError("resume requires an HF training checkpoint, not the final adapter export")
         previous = json.loads(manifest_path.read_text())
         if previous["identity"] != identity:
-            raise ValueError("resume scenario/model/config/dataset identity mismatch")
+            if not allow_admission_extension:
+                raise ValueError("resume scenario/model/config/dataset identity mismatch")
+            old = previous["identity"]
+            old_config, new_config = deepcopy(old["config"]), deepcopy(identity["config"])
+            old_inputs, new_inputs = deepcopy(old["inputs"]), deepcopy(identity["inputs"])
+            old_steps = int(old_config.get("grpo", {}).get("max_steps", 0))
+            new_steps = int(new_config.get("grpo", {}).get("max_steps", 0))
+            old_config.get("grpo", {}).pop("max_steps", None)
+            new_config.get("grpo", {}).pop("max_steps", None)
+            for candidate in (old_config, new_config):
+                if candidate.get("admission_mode") is not True:
+                    raise ValueError("admission resume requires --admission on both phases")
+            if old_config != new_config or new_steps <= old_steps:
+                raise ValueError("admission resume only permits increasing grpo.max_steps")
+            old_schedule_hash = old_inputs.pop("task_schedule_sha256", None)
+            old_groups = old_inputs.pop("scheduled_groups", None)
+            old_inputs.pop("config_sha256", None)
+            new_inputs.pop("task_schedule_sha256", None)
+            new_inputs.pop("scheduled_groups", None)
+            new_inputs.pop("config_sha256", None)
+            prefix_hash = new_inputs.pop("task_schedule_prefix_sha256", None)
+            old_inputs.pop("task_schedule_prefix_sha256", None)
+            if (old_inputs != new_inputs or old_schedule_hash != prefix_hash
+                    or not isinstance(old_groups, int) or old_groups >= identity["inputs"].get("scheduled_groups", 0)):
+                raise ValueError("admission schedule prefix/config identity mismatch")
     elif root.exists() and any(root.iterdir()):
         raise FileExistsError("output_dir is not empty; select a new run or explicit checkpoint resume")
     for name in ("checkpoints", "eval"):

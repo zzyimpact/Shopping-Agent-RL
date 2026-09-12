@@ -57,9 +57,12 @@ def parse_config(argv=None):
     reward.add_argument("--reward", choices=("strict", "loose"))
     reward.add_argument("--alpha", type=float)
     parser.add_argument("--resume-from-checkpoint")
+    parser.add_argument("--admission", action="store_true",
+                        help="enable the explicit bounded two-phase admission resume extension")
     args = vars(parser.parse_args(argv))
     config = load_grpo_config(args.pop("config"))
     resume = args.pop("resume_from_checkpoint")
+    admission = args.pop("admission")
     reward_name, alpha = args.pop("reward"), args.pop("alpha")
     for section in ("grpo", "sampling"):
         for key in config[section]:
@@ -71,6 +74,7 @@ def parse_config(argv=None):
                               {"strict": 1.0, "loose": 0.0}[reward_name] if reward_name else
                               config["reward_alpha"])
     config["mode"] = "grpo"
+    config["admission_mode"] = bool(admission)
     for key in ("scenario", "model_path", "train_task_manifest", "output_dir"):
         if not config.get(key):
             parser.error(f"{key} required via CLI or config")
@@ -98,13 +102,22 @@ def main(argv=None) -> int:
     schedule = task_schedule(tasks, seed=config["seed"], groups=spec.task_groups_per_update,
                              updates=spec.max_steps)
     tokenizer_path = config.get("tokenizer_path") or config["model_path"]
+    previous_groups = 0
+    if resume:
+        previous_manifest = Path(config["output_dir"]) / "run_manifest.json"
+        if previous_manifest.is_file():
+            previous_groups = int(json.loads(previous_manifest.read_text())["identity"]["inputs"].get(
+                "scheduled_groups", 0))
     inputs = {"train_task_manifest_sha256": sha256_file(config["train_task_manifest"]),
               "task_schedule_sha256": json_hash(schedule), "scheduled_groups": len(schedule),
+              "task_schedule_prefix_sha256": json_hash(schedule[:previous_groups or len(schedule)]),
               "token_contract": "qwen-append-only-sampled-ids-v1", "trl_contract": "1.12.0",
               "config_sha256": json_hash(config),
               "train_endpoint_health": validate_train_endpoint(config["endpoint"]),
               "lineage": validate_lineage(config), **model_metadata(config["model_path"], tokenizer_path)}
-    root = prepare_run(config["output_dir"], config=config, inputs=inputs, resume_from_checkpoint=resume)
+    root = prepare_run(config["output_dir"], config=config, inputs=inputs,
+                       resume_from_checkpoint=resume,
+                       allow_admission_extension=bool(config["admission_mode"]))
     try:
         from importlib.metadata import version
         from datasets import Dataset

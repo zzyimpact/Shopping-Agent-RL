@@ -20,6 +20,7 @@ from training.grpo import (
 import scripts.train_grpo as train_grpo_script
 from training.policy import GenerationConfig, PolicySample, QwenPolicy
 from training.rollout import AgentRollout
+from training.runtime import json_hash, prepare_run
 from tests.training.test_rollout import FakeEnv, step_payload
 from tests.training.test_sft_data import FakeQwenTokenizer
 
@@ -98,6 +99,26 @@ def test_train_endpoint_health_requires_train_split(monkeypatch):
 
     monkeypatch.setattr(train_grpo_script, "TeacherEnvClient", TrainClient)
     assert train_grpo_script.validate_train_endpoint("http://127.0.0.1:5500")["task_split"] == "train"
+
+
+def test_admission_resume_allows_only_schedule_prefix_extension(tmp_path):
+    base = {"mode": "grpo", "scenario": "single", "init": "base", "admission_mode": True,
+            "grpo": {"max_steps": 1}, "seed": 1}
+    schedule_one, schedule_two = ["task-a"], ["task-a", "task-b"]
+    inputs_one = {"task_schedule_sha256": json_hash(schedule_one), "task_schedule_prefix_sha256": json_hash(schedule_one),
+                  "scheduled_groups": 1, "config_sha256": "one"}
+    root = prepare_run(tmp_path, config=base, inputs=inputs_one)
+    checkpoint = root / "checkpoints" / "checkpoint-1"
+    checkpoint.mkdir()
+    (checkpoint / "trainer_state.json").write_text("{}")
+    phase_b = {**base, "grpo": {"max_steps": 2}}
+    inputs_two = {"task_schedule_sha256": json_hash(schedule_two), "task_schedule_prefix_sha256": json_hash(schedule_one),
+                  "scheduled_groups": 2, "config_sha256": "two"}
+    assert prepare_run(tmp_path, config=phase_b, inputs=inputs_two,
+                       resume_from_checkpoint=checkpoint, allow_admission_extension=True) == root
+    with pytest.raises(ValueError, match="identity mismatch"):
+        prepare_run(tmp_path, config=phase_b, inputs=inputs_two,
+                    resume_from_checkpoint=checkpoint)
 
 
 def sample(text=BUY, ids=(90, 99), probs=(-0.2, -0.4)):

@@ -15,7 +15,8 @@ from rewards.shopsim_reward import METRIC_KEYS
 from training.grpo import (
     GRPOSpec, build_grpo_trainer, collect_online_batch, group_metadata,
     initialize_grpo_model, load_grpo_config, metadata_bridge, rollout_reward,
-    shop_trainer_class, task_dataset_rows, task_schedule, train_grpo, validate_lineage,
+    shop_trainer_class, task_dataset_rows, task_schedule, train_grpo, trainable_lora_sha256,
+    validate_lineage,
 )
 import scripts.train_grpo as train_grpo_script
 from training.policy import GenerationConfig, PolicySample, QwenPolicy
@@ -95,6 +96,9 @@ def test_train_endpoint_health_requires_train_split(monkeypatch):
             return SimpleNamespace(payload={
                 "status": "ok", "task_split": "train",
                 "environment_version": "task-scoped-v3-multisession",
+                "policy_observation_version": "single-eval-policy-v1",
+                "profiler_protocol_version": "p3a-visible-action-v2",
+                "source_fingerprint": "2c8373d721766f0c1c5c98292bc59bbea2f6bbaef139eb20ac00fb09fd5ef67b",
             })
 
     monkeypatch.setattr(train_grpo_script, "TeacherEnvClient", TrainClient)
@@ -473,3 +477,31 @@ def test_cli_reward_exclusivity_defaults_preflight_config_and_resume():
         parse(base + ["--alpha", "1.5"])
     with pytest.raises(ValueError, match="GPU-PREFLIGHT"):
         GRPOSpec().validate("base")
+
+
+def test_admission_scheduler_horizon_and_lora_hash():
+    torch = pytest.importorskip("torch")
+    spec = GRPOSpec(num_generations=8, task_groups_per_update=1,
+                    max_steps=1, per_device_train_batch_size=1,
+                    lora_r=8, lora_alpha=16, target_modules=["q_proj"],
+                    scheduler_horizon=200)
+    spec.validate("base")
+    optimizer = torch.optim.AdamW([torch.nn.Parameter(torch.ones(1))], lr=1e-6)
+    from transformers.optimization import get_scheduler
+    scheduler = get_scheduler("linear", optimizer, num_warmup_steps=0,
+                              num_training_steps=spec.scheduler_horizon)
+    assert optimizer.param_groups[0]["lr"] == 1e-6
+    optimizer.step(); scheduler.step()
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.995e-6)
+
+    class Tiny(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_A = torch.nn.Parameter(torch.ones(2, 2))
+            self.base = torch.nn.Parameter(torch.ones(2, 2), requires_grad=False)
+
+    model = Tiny()
+    before = trainable_lora_sha256(model)
+    with torch.no_grad():
+        model.lora_A.add_(1)
+    assert before != trainable_lora_sha256(model)

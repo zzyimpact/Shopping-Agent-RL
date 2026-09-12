@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import json
+import hashlib
 from pathlib import Path
 import random
 import statistics
@@ -33,6 +34,8 @@ class GRPOSpec:
     target_modules: list[str] | None = None
     save_steps: int = 10
     logging_steps: int = 1
+    # Admission-only override; formal training leaves this unset.
+    scheduler_horizon: int | None = None
 
     def validate(self, init: str) -> None:
         if (self.loss_type, self.beta, self.scale_rewards) != ("grpo", 0.0, "group"):
@@ -45,6 +48,8 @@ class GRPOSpec:
             raise ValueError("G * task_groups_per_update must be divisible by microbatch")
         if min(self.learning_rate, self.save_steps, self.logging_steps) <= 0:
             raise ValueError("positive LR/checkpoint/logging cadence required")
+        if self.scheduler_horizon is not None and self.scheduler_horizon < self.max_steps:
+            raise ValueError("scheduler_horizon must cover trainer max_steps")
         if init not in {"base", "sft_adapter"}:
             raise ValueError("init must be base or sft_adapter")
         if init == "base" and (not self.lora_r or self.lora_r < 1 or not self.lora_alpha
@@ -189,6 +194,25 @@ def shop_trainer_class(base_class):
     return ShopGRPOTrainer
 
 
+def trainable_lora_sha256(model) -> str:
+    """Hash only trainable LoRA tensors; never serializes base-model weights."""
+    import torch
+
+    digest = hashlib.sha256()
+    found = 0
+    for name, value in model.named_parameters():
+        if value.requires_grad and "lora_" in name.lower():
+            tensor = value.detach().to(device="cpu").contiguous()
+            digest.update(name.encode("utf-8"))
+            digest.update(str(tuple(tensor.shape)).encode("ascii"))
+            digest.update(str(tensor.dtype).encode("ascii"))
+            digest.update(tensor.view(torch.uint8).numpy().tobytes())
+            found += 1
+    if not found:
+        raise ValueError("no trainable LoRA tensors found for admission hash")
+    return digest.hexdigest()
+
+
 def validate_lineage(config: dict) -> dict[str, Any]:
     if config["init"] == "base":
         if config.get("adapter_path") or config.get("sft_run_dir"):
@@ -284,6 +308,31 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory, use_cp
             if args.device.type == "cuda":
                 import torch
                 torch.cuda.reset_peak_memory_stats()
+            if config.get("admission_mode"):
+                model_for_hash = kwargs.get("model") or trainer.model
+                value = trainable_lora_sha256(model_for_hash)
+                self._before_lora_hash = value
+                if state.global_step > 0:
+                    previous = None
+                    metrics_path = output / "metrics.jsonl"
+                    if metrics_path.is_file():
+                        for line in metrics_path.read_text(encoding="utf-8").splitlines():
+                            try:
+                                item = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if (item.get("event") == "lora_hash"
+                                    and item.get("phase") == "after_update"
+                                    and int(item.get("step", -1)) == int(state.global_step)):
+                                previous = item.get("trainable_lora_sha256")
+                    if previous != value:
+                        raise RuntimeError("resume LoRA hash does not match checkpoint predecessor")
+                append_metrics(output / "metrics.jsonl", {
+                    "event": "lora_hash", "phase": "before_update",
+                    "step": int(state.global_step) + 1,
+                    "trainable_lora_sha256": value,
+                    **({"resume_lora_sha256_before": value} if state.global_step > 0 else {}),
+                })
 
         def on_step_end(self, args, state, control, **kwargs):
             update_wall = max(0.0, time.monotonic() - self.started - trainer._shop_rollout_seconds)
@@ -295,13 +344,30 @@ def build_grpo_trainer(*, model, tokenizer, dataset, config, env_factory, use_cp
             if args.device.type == "cuda":
                 import torch
                 metrics["gpu_peak_allocated_bytes"] = torch.cuda.max_memory_allocated()
+                metrics["gpu_peak_reserved_bytes"] = torch.cuda.max_memory_reserved()
                 metrics["peak_vram_bytes"] = metrics["gpu_peak_allocated_bytes"]
             append_metrics(output / "metrics.jsonl", metrics)
+            if config.get("admission_mode"):
+                model_for_hash = kwargs.get("model") or trainer.model
+                value = trainable_lora_sha256(model_for_hash)
+                append_metrics(output / "metrics.jsonl", {
+                    "event": "lora_hash", "phase": "after_update",
+                    "step": int(state.global_step),
+                    "trainable_lora_sha256": value,
+                    "changed": value != getattr(self, "_before_lora_hash", None),
+                })
 
         def on_log(self, args, state, control, logs=None, **kwargs):
             append_metrics(output / "metrics.jsonl", {"event": "trl", "step": state.global_step, **(logs or {})})
 
-    Trainer = shop_trainer_class(GRPOTrainer)
+    TrainerBase = shop_trainer_class(GRPOTrainer)
+    scheduler_horizon = spec.scheduler_horizon or spec.max_steps
+
+    class Trainer(TrainerBase):
+        def create_scheduler(self, num_training_steps, optimizer=None):
+            # Admission stops at 1/2 updates but follows formal 200-step LR.
+            return super().create_scheduler(scheduler_horizon, optimizer=optimizer)
+
     trainer = Trainer(model=model, processing_class=tokenizer, args=args, train_dataset=dataset,
                       reward_funcs=rollout_reward, rollout_func=rollout, peft_config=peft,
                       callbacks=[MetricsCallback()])

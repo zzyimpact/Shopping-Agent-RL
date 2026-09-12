@@ -32,6 +32,9 @@ def validate_train_endpoint(endpoint: str) -> dict:
         "status": "ok",
         "task_split": "train",
         "environment_version": "task-scoped-v3-multisession",
+        "policy_observation_version": "single-eval-policy-v1",
+        "profiler_protocol_version": "p3a-visible-action-v2",
+        "source_fingerprint": "2c8373d721766f0c1c5c98292bc59bbea2f6bbaef139eb20ac00fb09fd5ef67b",
     }
     if any(health.get(key) != value for key, value in required.items()):
         raise ValueError(f"GRPO requires TRAIN ShopEnv endpoint; got health={health}")
@@ -57,12 +60,15 @@ def parse_config(argv=None):
     reward.add_argument("--reward", choices=("strict", "loose"))
     reward.add_argument("--alpha", type=float)
     parser.add_argument("--resume-from-checkpoint")
+    parser.add_argument("--scheduler-horizon", type=int,
+                        help="admission-only linear scheduler horizon; formal training uses max_steps")
     parser.add_argument("--admission", action="store_true",
                         help="enable the explicit bounded two-phase admission resume extension")
     args = vars(parser.parse_args(argv))
     config = load_grpo_config(args.pop("config"))
     resume = args.pop("resume_from_checkpoint")
     admission = args.pop("admission")
+    scheduler_horizon = args.pop("scheduler_horizon")
     reward_name, alpha = args.pop("reward"), args.pop("alpha")
     for section in ("grpo", "sampling"):
         for key in config[section]:
@@ -70,6 +76,8 @@ def parse_config(argv=None):
             if value is not None:
                 config[section][key] = value
     config.update({key: value for key, value in args.items() if value is not None})
+    if scheduler_horizon is not None:
+        config["grpo"]["scheduler_horizon"] = scheduler_horizon
     config["reward_alpha"] = (alpha if alpha is not None else
                               {"strict": 1.0, "loose": 0.0}[reward_name] if reward_name else
                               config["reward_alpha"])

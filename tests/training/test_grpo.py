@@ -505,3 +505,43 @@ def test_admission_scheduler_horizon_and_lora_hash():
     with torch.no_grad():
         model.lora_A.add_(1)
     assert before != trainable_lora_sha256(model)
+
+
+def test_admission_resume_manifest_json_guard(tmp_path, monkeypatch):
+    output = tmp_path / "run"
+    output.mkdir()
+    (output / "run_manifest.json").write_text(json.dumps({
+        "identity": {"inputs": {"scheduled_groups": 1}}
+    }))
+    config = {
+        "scenario": "single", "model_path": "model", "train_task_manifest": "manifest",
+        "output_dir": str(output), "seed": 1, "admission_mode": True,
+        "endpoint": "endpoint", "init": "base", "reward_alpha": 1.0,
+    }
+    spec = SimpleNamespace(max_steps=2, task_groups_per_update=1)
+    resume = output / "checkpoints" / "checkpoint-1"
+    resume.parent.mkdir()
+    resume.mkdir()
+    (resume / "trainer_state.json").write_text("{}")
+    captured = {}
+
+    monkeypatch.setattr(train_grpo_script, "parse_config", lambda _argv=None: (config, spec, str(resume)))
+    monkeypatch.setattr(train_grpo_script, "load_task_ids", lambda *args, **kwargs: ["A", "B"])
+    monkeypatch.setattr(train_grpo_script, "task_schedule",
+                        lambda tasks, **kwargs: [captured.setdefault("tasks", tasks), "B"])
+    monkeypatch.setattr(train_grpo_script, "sha256_file", lambda path: "file-hash")
+    monkeypatch.setattr(train_grpo_script, "json_hash", lambda value: captured.setdefault("hashes", []).append(value) or "hash")
+    monkeypatch.setattr(train_grpo_script, "validate_train_endpoint", lambda endpoint: {})
+    monkeypatch.setattr(train_grpo_script, "validate_lineage", lambda config: {"init": "base"})
+    monkeypatch.setattr(train_grpo_script, "model_metadata", lambda *args: {})
+
+    class ReachedAfterManifest(RuntimeError):
+        pass
+
+    def stop_after_manifest(*args, **kwargs):
+        raise ReachedAfterManifest
+
+    monkeypatch.setattr(train_grpo_script, "prepare_run", stop_after_manifest)
+    with pytest.raises(ReachedAfterManifest):
+        train_grpo_script.main([])
+    assert any(value == [["A", "B"]] for value in captured["hashes"])

@@ -15,3 +15,11 @@ teacher 数据集、训练或实验结果，本文不宣称最终性能。
 当前状态：P0/P1/P2 已完成；P3 teacher-data pipeline in progress。P3c 尚待 tiny smoke
 验收，训练、正式 teacher
 collection 与最终评测仍未开始。
+# Current execution status
+
+The active scenario is `single_persona`; `single` is held.  The historical
+teacher collection `formal-20260909T035508Z-17af7151` remains a stopped,
+budget-limited P3b-v1.1 run (Pass A complete, target 6000, Pass B/C not run).
+Its offline frozen dataset is `single_persona_budgeted_v1`; see
+`experiments/deviations.md` for the provenance and Persona identifier
+sanitization contract.

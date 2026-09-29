@@ -1,0 +1,20 @@
+{
+  "dataset_version": "single_persona_budgeted_v1",
+  "scenario": "single_persona",
+  "source_run_id": "formal-20260909T035508Z-17af7151",
+  "original_collection_policy": "p3b-v1.1",
+  "original_target": 6000,
+  "original_status": "stopped",
+  "freeze_mode": "budgeted",
+  "freeze_reason": "teacher_api_budget_exhausted",
+  "candidate_count": 2673,
+  "frozen_count": 2659,
+  "exclusions": {
+    "target_id_exploitation": 10,
+    "invalid_terminal": 4
+  },
+  "persona_sanitizer_version": "persona-policy-sanitizer-v1",
+  "source_artifacts": "data/teacher_raw/single_persona/formal-20260909T035508Z-17af7151/accepted",
+  "content_sha256": "e61bb4515d07da9a1c589454b9bfeefd31c57ed306675ac809998c1040e6646c",
+  "note": "Generated offline; train.jsonl/raw artifacts remain gitignored. Update this record only with a new frozen dataset version."
+}

@@ -31,6 +31,8 @@ runs/
 outputs/
 experiments/*/
 !experiments/.gitkeep
+!experiments/datasets/
+!experiments/datasets/*.json
 *.log
 *.sqlite
 *.sqlite-*

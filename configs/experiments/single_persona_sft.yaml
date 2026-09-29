@@ -1,0 +1,23 @@
+scenario: single_persona
+mode: sft
+model_path: null
+tokenizer_path: null
+selection_manifest: null
+accepted_root: null
+train_task_manifest: null
+output_dir: null
+sft:
+  num_train_epochs: 4
+  learning_rate: 1.0e-5
+  effective_batch_size: 32
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 32
+  max_length: 32768
+  lora_r: 8
+  lora_alpha: 16
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+  lora_dropout: 0.0
+  gradient_checkpointing: true
+  save_steps: 100
+  logging_steps: 10
+# Candidate only: long-context fit must be proven by the user's GPU preflight.

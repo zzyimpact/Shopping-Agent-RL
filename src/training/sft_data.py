@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from rollout.prompt import assert_no_evaluator_leakage
+from rollout.prompt import assert_no_evaluator_leakage, sanitize_persona
 
 
 ALLOWED_ROLES = {"system", "user", "assistant"}
@@ -50,6 +50,23 @@ def project_messages(record: Mapping[str, Any]) -> list[dict[str, str]]:
     for index, message in enumerate(messages[1:], 1):
         if message["role"] != ("user" if index % 2 else "assistant"):
             raise ValueError("expected alternating user observation / assistant turns")
+    # Historical persona artifacts contain the original visible prompt.  Apply
+    # the same schema-level sanitizer used by rollout/eval to the policy copy;
+    # assistant responses and raw artifacts remain untouched.
+    if record.get("scenario") == "single_persona":
+        marker = "\n用户的个人文档是："
+        system = messages[0]["content"]
+        if marker in system:
+            prefix, encoded = system.rsplit(marker, 1)
+            try:
+                persona = json.loads(encoded)
+            except json.JSONDecodeError as exc:
+                raise ValueError("single_persona system prompt has invalid persona JSON") from exc
+            if isinstance(persona, Mapping):
+                messages[0]["content"] = prefix + marker + json.dumps(
+                    sanitize_persona(persona), ensure_ascii=False)
+        else:
+            raise ValueError("single_persona system prompt missing persona marker")
     visible = record.get("visible_responses")
     if visible is not None and visible != [m["content"] for m in messages if m["role"] == "assistant"]:
         raise ValueError("stored assistant messages differ from visible_responses")

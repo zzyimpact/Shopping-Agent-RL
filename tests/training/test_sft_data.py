@@ -8,6 +8,7 @@ from training.sft_data import (
     assistant_turn_mask, load_selected_examples, project_messages,
     tokenize_with_assistant_mask, write_sft_jsonl,
 )
+from rollout.prompt import PERSONA_SANITIZER_VERSION, sanitize_persona
 
 
 def record():
@@ -122,3 +123,20 @@ def test_changed_template_fails_instead_of_guessing_a_mask():
             return super().apply_chat_template(messages, **kwargs) + "rewritten"
     with pytest.raises(ValueError, match="PREFLIGHT"):
         tokenize_with_assistant_mask(RewritingTokenizer(), record()["messages"])
+
+
+def test_persona_identifier_sanitizer_removes_ids_and_keeps_preferences():
+    persona = {"用户ID": "U123", "兴趣偏好": {"颜色": ["蓝"], "价格": 20},
+               "__reasoning__": "private"}
+    clean = sanitize_persona(persona)
+    assert "用户ID" not in clean and clean["兴趣偏好"]["颜色"] == ["蓝"]
+    assert PERSONA_SANITIZER_VERSION == "persona-policy-sanitizer-v1"
+
+
+def test_single_persona_projection_sanitizes_system_only():
+    raw = record()
+    raw["scenario"] = "single_persona"
+    raw["messages"][0]["content"] = 'policy\n用户的个人文档是：' + json.dumps({"用户ID": "U123", "偏好": "蓝"}, ensure_ascii=False)
+    projected = project_messages(raw)
+    assert "用户ID" not in projected[0]["content"]
+    assert "蓝" in projected[0]["content"]

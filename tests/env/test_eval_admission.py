@@ -151,3 +151,15 @@ def test_lifecycle_rejects_missing_pidfd_before_start(monkeypatch):
     monkeypatch.delattr(eval_env.os, "pidfd_open", raising=False)
     with pytest.raises(RuntimeError, match="pidfd required"):
         eval_env.require_pidfd()
+
+
+def test_fixed128_adapter_is_allowed_but_identity_and_formal_gate_remain(monkeypatch):
+    from scripts import eval_policy
+    monkeypatch.setitem(eval_policy.FIXED_IDS_HASH, "single_persona", "frozen")
+    config = {"scenario": "single_persona", "formal_evaluation": True,
+              "adapter_path": "/tmp/adapter"}
+    eval_policy.validate_fixed_128_contract(config, list(range(128)), "frozen")
+    with pytest.raises(ValueError, match="frozen formal"):
+        eval_policy.validate_fixed_128_contract({**config, "formal_evaluation": False}, list(range(128)), "frozen")
+    with pytest.raises(ValueError, match="manifest"):
+        eval_policy.validate_fixed_128_contract(config, list(range(127)), "frozen")

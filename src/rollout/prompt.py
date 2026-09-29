@@ -68,6 +68,30 @@ Thought: 简要说明你在当前状态下的思考过程和操作依据。
 Action: 用规定格式输出你选择的操作。
 """
 
+PERSONA_SANITIZER_VERSION = "persona-policy-sanitizer-v1"
+# These keys identify an account/session.  They are not shopping preferences
+# and must never be policy-visible.  The comparison is schema-key based, not
+# target-ASIN based, so the same rule applies to future tasks and evals.
+_PERSONA_IDENTIFIER_KEYS = {
+    "用户ID", "用户id", "用户编号", "用户标识", "账号ID", "账号id",
+    "user_id", "userid", "userId", "account_id", "accountId", "customer_id",
+    "customerId", "session_id", "sessionId",
+}
+
+
+def sanitize_persona(persona: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove identifier-only persona fields while retaining preferences."""
+    def clean(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {str(k): clean(v) for k, v in value.items()
+                    if str(k) not in _PERSONA_IDENTIFIER_KEYS}
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        return value
+    result = clean(persona)
+    assert isinstance(result, dict)
+    return result
+
 
 def prompt_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -106,7 +130,7 @@ def policy_context_from_reset(payload: Mapping[str, Any], scenario: str) -> Poli
 def _persona_text(persona: Mapping[str, Any]) -> str:
     # Match upstream's visible persona projection and remove its private
     # reasoning field.  Never include evaluator target/reward fields here.
-    clean = {k: v for k, v in persona.items() if k != "__reasoning__"}
+    clean = sanitize_persona({k: v for k, v in persona.items() if k != "__reasoning__"})
     forbidden = {"asin", "target_asin", "attribute", "attributes", "options",
                  "instruction_options", "pricing", "price", "reward", "goal",
                  "target_product", "target_option"}

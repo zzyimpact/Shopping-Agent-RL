@@ -78,6 +78,15 @@ FORMAL_GENERATION = asdict(GenerationConfig(
     do_sample=True, temperature=0.7, top_p=0.8, top_k=20, min_p=0.0))
 
 
+def validate_fixed_128_contract(config, tasks, ids_hash):
+    """Validate frozen TEST identity; adapters are valid lineage variants."""
+    scenario = config["scenario"]
+    if len(tasks) != 128 or ids_hash != FIXED_IDS_HASH[scenario]:
+        raise ValueError("fixed-128 manifest differs from frozen P2 task IDs/order")
+    if not config.get("formal_evaluation"):
+        raise ValueError("fixed-128 requires the frozen formal evaluation contract")
+
+
 def validate_seed_contract(config):
     if config.get("sampling_seed_strategy") != SAMPLING_SEED_STRATEGY:
         raise ValueError("evaluation requires per_episode_manifest_index_v1 seed strategy")
@@ -94,10 +103,7 @@ def validate_inputs(config):
     validate_seed_contract(config)
     episode_seed(config["base_seed"], len(tasks) - 1)
     if config["fixed_128"]:
-        if len(tasks) != 128 or ids_hash != FIXED_IDS_HASH[config["scenario"]]:
-            raise ValueError("fixed-128 manifest differs from frozen P2 task IDs/order")
-        if not config.get("formal_evaluation") or config["adapter_path"]:
-            raise ValueError("fixed-128 Base requires eval_formal config and no adapter")
+        validate_fixed_128_contract(config, tasks, ids_hash)
     if config.get("formal_evaluation"):
         if (config["seed"] != 1 or config["max_action_steps"] != 30
                 or config["generation"] != FORMAL_GENERATION or config["reward_alpha"] != 1.0

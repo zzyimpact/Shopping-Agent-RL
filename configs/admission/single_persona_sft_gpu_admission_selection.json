@@ -1,0 +1,362 @@
+{
+  "dataset_version": "single_persona_budgeted_v1",
+  "scenario": "single_persona",
+  "persona_sanitizer_version": "persona-policy-sanitizer-v1",
+  "count": 32,
+  "examples": [
+    {
+      "accepted_id": "b5a98c22ba2448e1917e8a391fd695c3",
+      "task_id": "855105325191",
+      "source_path": "b5a98c22ba2448e1917e8a391fd695c3.json",
+      "source_sha256": "937ac4b9c41b8e4d58268071d58c86686fee2754780288a120d5904b2500fe3a",
+      "total_tokens": 29741,
+      "supervised_tokens": 2496,
+      "selection_roles": [
+        "longest"
+      ]
+    },
+    {
+      "accepted_id": "41308d04d7014fac8ce3ec08137529ea",
+      "task_id": "886180634453",
+      "source_path": "41308d04d7014fac8ce3ec08137529ea.json",
+      "source_sha256": "01061b62c33c01c5dfb3aff3455316efb5677218d7f752187d7475222362763f",
+      "total_tokens": 3790,
+      "supervised_tokens": 311,
+      "selection_roles": [
+        "p50",
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "08c03f7ed1344564bdfe9f6d89c08b8e",
+      "task_id": "941489090479",
+      "source_path": "08c03f7ed1344564bdfe9f6d89c08b8e.json",
+      "source_sha256": "ac88577b6e030f7cfd70e10a95e1a5d0dd334279ebc1958c134e4d05e685872e",
+      "total_tokens": 5490,
+      "supervised_tokens": 423,
+      "selection_roles": [
+        "p90"
+      ]
+    },
+    {
+      "accepted_id": "11bd2510326b48209fed6e9b2ce4a037",
+      "task_id": "693073154329",
+      "source_path": "11bd2510326b48209fed6e9b2ce4a037.json",
+      "source_sha256": "90229d4c9a4ce393095418f2a6ab15bc2eb22a2c8e5137b94e57ea0578dcea12",
+      "total_tokens": 13292,
+      "supervised_tokens": 931,
+      "selection_roles": [
+        "p99"
+      ]
+    },
+    {
+      "accepted_id": "2b1bfb3f4d584793ba03273301fd57e3",
+      "task_id": "940242892052",
+      "source_path": "2b1bfb3f4d584793ba03273301fd57e3.json",
+      "source_sha256": "fec639ef1fe6632cf84189d9a56131267dcd3ab41d4ffa97e16b836afad5046b",
+      "total_tokens": 3265,
+      "supervised_tokens": 237,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "0d112cc599544084badcceefd2d3d923",
+      "task_id": "899641832783",
+      "source_path": "0d112cc599544084badcceefd2d3d923.json",
+      "source_sha256": "4d078e5b00eda18a7dbb214a6419d44fd2685dd5c12bb0932a3b0fa1c2e4acb9",
+      "total_tokens": 3306,
+      "supervised_tokens": 270,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "39e87b9e0e6541a1b6bd320daa35be42",
+      "task_id": "898936696545",
+      "source_path": "39e87b9e0e6541a1b6bd320daa35be42.json",
+      "source_sha256": "c007f21bcd64dd5826b69b0ad468241fdce50c5a4074901570bb9627d22139d6",
+      "total_tokens": 3336,
+      "supervised_tokens": 243,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "89c8a8098fd8467dad2b3df1b0b2fab1",
+      "task_id": "590447447969",
+      "source_path": "89c8a8098fd8467dad2b3df1b0b2fab1.json",
+      "source_sha256": "026290f4eee6eb0f80de6f42d2cdd905c4a4c06d478340eeaa78cbc78cfc58b7",
+      "total_tokens": 3366,
+      "supervised_tokens": 283,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "30966143e1184f9fb083099aaf231aa7",
+      "task_id": "937896482992",
+      "source_path": "30966143e1184f9fb083099aaf231aa7.json",
+      "source_sha256": "116e1bb3ee011013d94538fa70908beef1785944c38369385409adc9eaccbb66",
+      "total_tokens": 3401,
+      "supervised_tokens": 286,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "531451cdac464e58ac57d0bae22b3ebb",
+      "task_id": "911809033731",
+      "source_path": "531451cdac464e58ac57d0bae22b3ebb.json",
+      "source_sha256": "b35ce2146fdfd7e25f072871132e28a875122d8ae041ff9d766aeaaaf51a0439",
+      "total_tokens": 3434,
+      "supervised_tokens": 312,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "a2e453a350734159ab8a13efc185f257",
+      "task_id": "727134375132",
+      "source_path": "a2e453a350734159ab8a13efc185f257.json",
+      "source_sha256": "ddd14e85a76b035b366557fdd8477e1ba7d310e3023b1e215622e6ca64d0c20c",
+      "total_tokens": 3457,
+      "supervised_tokens": 283,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "165136dc0d594cb08eefb6b704b2513c",
+      "task_id": "572699964551",
+      "source_path": "165136dc0d594cb08eefb6b704b2513c.json",
+      "source_sha256": "4d3210b5c246f5c4e91de4745667f7cb4bba68ab1bb6a53c636cf2ab0e4c1e04",
+      "total_tokens": 3488,
+      "supervised_tokens": 310,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "55b110429f4944bbb6bdf1a198df99f2",
+      "task_id": "741521696984",
+      "source_path": "55b110429f4944bbb6bdf1a198df99f2.json",
+      "source_sha256": "ef085db171403e30866b2922cb31590349c4b42b2e67e9470e9bb57503091195",
+      "total_tokens": 3521,
+      "supervised_tokens": 293,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "f971c45eba1849899076c5d815b48c21",
+      "task_id": "864108836670",
+      "source_path": "f971c45eba1849899076c5d815b48c21.json",
+      "source_sha256": "dcaa76479db35e7a13639672c0fc365141e2895963528bade2e28795c85ccece",
+      "total_tokens": 3558,
+      "supervised_tokens": 309,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "dfc11bb37adb4339b4f03d9df8c06e4c",
+      "task_id": "891867648893",
+      "source_path": "dfc11bb37adb4339b4f03d9df8c06e4c.json",
+      "source_sha256": "aad8da53949f3528f5e1e08c68ebbc61f54bcf6eb280082ba2d6353331fd9c12",
+      "total_tokens": 3596,
+      "supervised_tokens": 369,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "765cd246335d46bca48da27c40688260",
+      "task_id": "691733306912",
+      "source_path": "765cd246335d46bca48da27c40688260.json",
+      "source_sha256": "6f7fa08371bca714c530b7d83e536191ca36ba9c6fe16237b298746e76d3f718",
+      "total_tokens": 3634,
+      "supervised_tokens": 322,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "f7e446b6e0b44a6492c9953b0e627107",
+      "task_id": "910767494863",
+      "source_path": "f7e446b6e0b44a6492c9953b0e627107.json",
+      "source_sha256": "0c732fa1be5e7b3ed5ff7c0514afa6e37ac1d1002a2d7883e691bfa2579b29b9",
+      "total_tokens": 3676,
+      "supervised_tokens": 287,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "8e769cf1036643768cc115f5e4372e60",
+      "task_id": "716988994452",
+      "source_path": "8e769cf1036643768cc115f5e4372e60.json",
+      "source_sha256": "ff920c97f32da99bbbdc34ec5b9f83503cd73a509665927fc435fa2c56e6ce83",
+      "total_tokens": 3712,
+      "supervised_tokens": 239,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "23fc7505c3c94273aba605346a6d7558",
+      "task_id": "939219593629",
+      "source_path": "23fc7505c3c94273aba605346a6d7558.json",
+      "source_sha256": "a9b7c9996ef342ebc3c6c1c5e74405b33c6a4a845af896a5e5f5cba9ff122c66",
+      "total_tokens": 3746,
+      "supervised_tokens": 314,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "650c4b766bbe4936950dbecb7a0e411d",
+      "task_id": "670443894764",
+      "source_path": "650c4b766bbe4936950dbecb7a0e411d.json",
+      "source_sha256": "a9f006f97da9c9cbfaa6f833f7daffdbcf257d0c7d453fffa8453e4e50fd09b6",
+      "total_tokens": 3839,
+      "supervised_tokens": 337,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "5a836589c7c946d0a00f8571ee77f94a",
+      "task_id": "649427128652",
+      "source_path": "5a836589c7c946d0a00f8571ee77f94a.json",
+      "source_sha256": "a4fdd5a038de5ee0cdabb2a1523188390a05a9fc7f2bcbaaa7317e0d2172709e",
+      "total_tokens": 3889,
+      "supervised_tokens": 419,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "a6a30498a3bc4f56bb2581b30e87c54a",
+      "task_id": "754896567632",
+      "source_path": "a6a30498a3bc4f56bb2581b30e87c54a.json",
+      "source_sha256": "ac597ee6ee28231511375c37d46b1bb81c5b0b86a2a41734fc8ecc5abe75b54e",
+      "total_tokens": 3946,
+      "supervised_tokens": 407,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "5ca696d4bebc44c3852f5c1d31c01a97",
+      "task_id": "760543311399",
+      "source_path": "5ca696d4bebc44c3852f5c1d31c01a97.json",
+      "source_sha256": "b70a1ba4a894ac78ceb1b24e2bf768d88c7c683744d9224b6cde9dece7a28d77",
+      "total_tokens": 3999,
+      "supervised_tokens": 315,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "70fe52ec78a843b295ca33c15d4263c3",
+      "task_id": "810942750751",
+      "source_path": "70fe52ec78a843b295ca33c15d4263c3.json",
+      "source_sha256": "90286b8710dc46c3873179976cc279f3a46e9e70cc5d96b06d13cb0db0b35bb3",
+      "total_tokens": 4056,
+      "supervised_tokens": 285,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "7cf4416961ca4463ac0e72ff31240000",
+      "task_id": "939710218482",
+      "source_path": "7cf4416961ca4463ac0e72ff31240000.json",
+      "source_sha256": "bf07e3dbfa8719f9d36630841f773f4089f816066d0435761cf5c6691ea5a0ca",
+      "total_tokens": 4132,
+      "supervised_tokens": 369,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "63328ea6a85146faac4145bd8ac310b7",
+      "task_id": "620477404907",
+      "source_path": "63328ea6a85146faac4145bd8ac310b7.json",
+      "source_sha256": "877ff21222535b0f7e598a501832d81505aeb89c50b3933994a32fafce95acb5",
+      "total_tokens": 4228,
+      "supervised_tokens": 326,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "f3b7cc1cb9e3436a87679355d352e25c",
+      "task_id": "829773167680",
+      "source_path": "f3b7cc1cb9e3436a87679355d352e25c.json",
+      "source_sha256": "b62f665dab58e800c3f7a66296a6225a428c56d812be7471c480db8fbea8979d",
+      "total_tokens": 4343,
+      "supervised_tokens": 340,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "d5d4a1e100bd4625b54127f553410d9e",
+      "task_id": "898167113112",
+      "source_path": "d5d4a1e100bd4625b54127f553410d9e.json",
+      "source_sha256": "921014af0d52b659fa631cddb4cd191ac16752b4d0f9ccb92ced09b292bd1154",
+      "total_tokens": 4496,
+      "supervised_tokens": 283,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "e97107a7d5e84b0db909af1caec94668",
+      "task_id": "806398625228",
+      "source_path": "e97107a7d5e84b0db909af1caec94668.json",
+      "source_sha256": "5dc14de3f789e4e6e0bb82446e9f2670de8c2a0ad19c7ec6d3f57e38c5d52089",
+      "total_tokens": 4664,
+      "supervised_tokens": 328,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "9800c9f1efc44750b7e448a617a0d4ff",
+      "task_id": "768773175362",
+      "source_path": "9800c9f1efc44750b7e448a617a0d4ff.json",
+      "source_sha256": "8f347d97c07ead6494fd331b0056e06224fb7012581a7dd720c2f7e20989a569",
+      "total_tokens": 4869,
+      "supervised_tokens": 505,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "3548d57afc2f43eab191921d50935397",
+      "task_id": "691979805397",
+      "source_path": "3548d57afc2f43eab191921d50935397.json",
+      "source_sha256": "062975f52905003d688e7d6ea87fbfc9e798dded788abb6aa6f6a0599c1b5c0e",
+      "total_tokens": 5141,
+      "supervised_tokens": 325,
+      "selection_roles": [
+        "stratified"
+      ]
+    },
+    {
+      "accepted_id": "03604942ac9d4585adc105f697b7b13a",
+      "task_id": "764251550148",
+      "source_path": "03604942ac9d4585adc105f697b7b13a.json",
+      "source_sha256": "49dab4a26756897d840c97f68870d2d1d1ad8045b7f1a40950a40d82f8588d85",
+      "total_tokens": 5605,
+      "supervised_tokens": 253,
+      "selection_roles": [
+        "stratified"
+      ]
+    }
+  ],
+  "selection_sha256": "3e68e4aad2ebd1c7a0f236c3d19d6a390792cbf3a34d8059740eb12d8544af72"
+}

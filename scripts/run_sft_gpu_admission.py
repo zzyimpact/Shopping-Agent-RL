@@ -37,6 +37,15 @@ def canonical_hash(value: object) -> str:
                                      separators=(",", ":")).encode()).hexdigest()
 
 
+def validate_dependency_version(package: str, actual: str, expected: str) -> None:
+    # CUDA PyTorch wheels use a PEP 440 local suffix (for example +cu128).
+    # The frozen API/runtime contract pins the upstream release 2.8.0 while
+    # retaining the CUDA build identifier as report provenance.
+    normalized = actual.split("+", 1)[0] if package == "torch" else actual
+    if normalized != expected:
+        raise RuntimeError(f"PINNED_DEPENDENCY_MISMATCH:{package}:{actual}")
+
+
 def phase_plan(selection: dict) -> dict[str, list[str]]:
     rows = selection["examples"]
     longest = [row for row in rows if "longest" in row["selection_roles"]]
@@ -157,9 +166,11 @@ def _preflight(args, dataset: Path, selection: Path, output: Path) -> dict:
         source = (accepted_root / row["source_path"]).resolve()
         if source.parent != accepted_root or not source.is_file() or _sha256(source) != row["source_sha256"]:
             raise RuntimeError(f"SOURCE_ARTIFACT_HASH_MISMATCH:{row['accepted_id']}")
+    dependencies = {}
     for package, expected in PINNED.items():
-        if importlib.metadata.version(package) != expected:
-            raise RuntimeError(f"PINNED_DEPENDENCY_MISMATCH:{package}")
+        actual = importlib.metadata.version(package)
+        validate_dependency_version(package, actual, expected)
+        dependencies[package] = actual
     model_root = Path(args.model_path).resolve()
     for name, expected in MODEL_METADATA_SHA256.items():
         path = model_root / name
@@ -175,7 +186,8 @@ def _preflight(args, dataset: Path, selection: Path, output: Path) -> dict:
     disk_root = output.parent if output.parent.exists() else ROOT
     if shutil.disk_usage(disk_root).free < 10 * 1024**3:
         raise RuntimeError("INSUFFICIENT_DISK_SPACE")
-    return {"manifest": manifest, "selection": selected, "accepted_root": accepted_root}
+    return {"manifest": manifest, "selection": selected, "accepted_root": accepted_root,
+            "dependencies": dependencies}
 
 
 def main(argv=None) -> int:
@@ -204,7 +216,8 @@ def main(argv=None) -> int:
     print("SFT_GPU_ADMISSION_PREFLIGHT: PASS", flush=True)
     report = {"status": "running", "dataset_version": DATASET_VERSION,
               "dataset_sha256": DATASET_SHA256, "selection_sha256": SELECTION_SHA256,
-              "sanitizer_version": SANITIZER_VERSION, "candidate_runtime": {
+              "sanitizer_version": SANITIZER_VERSION, "dependencies": context["dependencies"],
+              "candidate_runtime": {
                   "microbatch": 1, "gradient_accumulation": 32, "effective_batch": 32}}
     report_path = output / "sft_gpu_admission.json"
     _write_report(report_path, report)

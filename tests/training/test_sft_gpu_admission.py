@@ -12,6 +12,7 @@ from scripts.run_sft_gpu_admission import (
     phase_plan,
     run_phase_sequence,
     validate_cuda,
+    validate_dependency_version,
     validate_dataset_identity,
     validate_output_path,
     validate_success_report,
@@ -76,6 +77,15 @@ def test_no_gpu_fails_fast():
         cuda = Cuda()
     with pytest.raises(RuntimeError, match="USER_GPU_NOT_AVAILABLE"):
         validate_cuda(Torch())
+
+
+def test_cuda_torch_local_version_suffix_is_provenance_not_release_drift():
+    validate_dependency_version("torch", "2.8.0+cu128", "2.8.0")
+    validate_dependency_version("transformers", "4.57.6", "4.57.6")
+    with pytest.raises(RuntimeError, match="PINNED_DEPENDENCY_MISMATCH:torch:2.9.0"):
+        validate_dependency_version("torch", "2.9.0+cu128", "2.8.0")
+    with pytest.raises(RuntimeError, match="PINNED_DEPENDENCY_MISMATCH:transformers"):
+        validate_dependency_version("transformers", "4.57.6+local", "4.57.6")
 
 
 def test_phase_a_failure_skips_b_and_c():

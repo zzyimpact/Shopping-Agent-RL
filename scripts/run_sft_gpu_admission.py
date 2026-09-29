@@ -25,6 +25,7 @@ SELECTION_SHA256 = "3e68e4aad2ebd1c7a0f236c3d19d6a390792cbf3a34d8059740eb12d8544
 FORMAL_TOTAL_UPDATES = 336  # ceil(2659 / effective_batch=32) * 4 epochs
 PINNED = {"torch": "2.8.0", "transformers": "4.57.6", "trl": "1.12.0",
           "peft": "0.19.1", "accelerate": "1.15.0", "datasets": "4.8.5"}
+ATTENTION_BACKEND = "sdpa"
 MODEL_METADATA_SHA256 = {
     "config.json": "f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30",
     "model.safetensors.index.json": "f9fdbcb91c23971c13ec5d5f2573d2349e8f61f2f049371ec699281748fdb1bc",
@@ -217,6 +218,7 @@ def main(argv=None) -> int:
     report = {"status": "running", "dataset_version": DATASET_VERSION,
               "dataset_sha256": DATASET_SHA256, "selection_sha256": SELECTION_SHA256,
               "sanitizer_version": SANITIZER_VERSION, "dependencies": context["dependencies"],
+              "attention_backend": ATTENTION_BACKEND,
               "candidate_runtime": {
                   "microbatch": 1, "gradient_accumulation": 32, "effective_batch": 32}}
     report_path = output / "sft_gpu_admission.json"
@@ -239,8 +241,13 @@ def main(argv=None) -> int:
             encoded = tokenize_with_assistant_mask(tokenizer, project_messages(record), max_length=32768)
             rows.append({"accepted_id": accepted_id, **encoded})
         unique = {row["accepted_id"]: row for row in rows}
-        model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16,
-                                                     local_files_only=True)
+        # Qwen3 eager attention materializes an O(sequence_length^2) score
+        # tensor and OOMs at the real 29,741-token sample on 96 GB. SDPA
+        # preserves attention semantics while selecting a memory-efficient
+        # PyTorch CUDA kernel; this changes execution only.
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path, dtype=torch.bfloat16, attn_implementation=ATTENTION_BACKEND,
+            local_files_only=True)
         spec = SFTConfigSpec(output_dir=output, num_train_epochs=4, learning_rate=1e-5,
                              effective_batch_size=32, per_device_train_batch_size=1,
                              gradient_accumulation_steps=32, max_length=32768, lora_r=8,

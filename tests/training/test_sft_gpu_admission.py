@@ -7,6 +7,7 @@ import scripts.run_sft_gpu_admission as admission
 from scripts.prepare_sft_gpu_admission import select
 
 from scripts.run_sft_gpu_admission import (
+    ATTENTION_BACKEND,
     SELECTION_SHA256,
     canonical_hash,
     phase_plan,
@@ -103,6 +104,9 @@ def test_effective_batch_and_no_external_service_path():
     assert '"microbatch": 1, "gradient_accumulation": 32, "effective_batch": 32' in source
     assert "teacher_env" not in source
     assert "collect_teacher" not in source
+    assert ATTENTION_BACKEND == "sdpa"
+    assert "attn_implementation=ATTENTION_BACKEND" in source
+    assert "torch_dtype=" not in source
 
 
 def test_dataset_hash_and_sanitizer_mismatch_fail(tmp_path, monkeypatch):

@@ -17,6 +17,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_RUNS = (ROOT.parent / "runs").resolve()
 DATASET_VERSION = "single_persona_budgeted_v1"
 DATASET_SHA256 = "e61bb4515d07da9a1c589454b9bfeefd31c57ed306675ac809998c1040e6646c"
 SANITIZER_VERSION = "persona-policy-sanitizer-v1"
@@ -115,8 +116,7 @@ def _write_report(path: Path, report: dict) -> None:
 
 
 def validate_output_path(output: Path) -> None:
-    runs = (ROOT / "runs").resolve()
-    if output.resolve().parent != runs or output.resolve() == runs:
+    if output.resolve().parent != RUNTIME_RUNS or output.resolve() == RUNTIME_RUNS:
         raise RuntimeError("UNSAFE_ADMISSION_OUTPUT_PATH")
 
 
@@ -183,7 +183,7 @@ def main(argv=None) -> int:
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--dataset", default=str(ROOT / "data/sft_frozen" / DATASET_VERSION))
     parser.add_argument("--selection", default=str(ROOT / "configs/admission/single_persona_sft_gpu_admission_selection.json"))
-    parser.add_argument("--output-dir", default=str(ROOT / "runs/sft-gpu-admission-single-persona-v1"))
+    parser.add_argument("--output-dir", default=str(RUNTIME_RUNS / "sft-gpu-admission-single-persona-v1"))
     args = parser.parse_args(argv)
     dataset, selection, output = map(lambda x: Path(x).resolve(), (args.dataset, args.selection, args.output_dir))
     current_phase = "model_load"

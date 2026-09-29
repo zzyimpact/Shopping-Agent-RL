@@ -110,8 +110,18 @@ def test_dataset_hash_and_sanitizer_mismatch_fail(tmp_path, monkeypatch):
 
 
 def test_checkpoint_output_path_is_scoped_to_runs():
+    assert admission.RUNTIME_RUNS == (admission.ROOT.parent / "runs").resolve()
+    validate_output_path(admission.RUNTIME_RUNS / "bounded-admission")
     with pytest.raises(RuntimeError, match="UNSAFE_ADMISSION_OUTPUT_PATH"):
         validate_output_path(Path("/tmp/not-a-project-run"))
+
+
+def test_shell_runner_appends_chronology_but_never_reuses_run_output():
+    source = (Path(__file__).parents[2] / "scripts/run_sft_gpu_admission.sh").read_text()
+    assert 'OUT_DIR="${OUT_DIR:-$ROOT/../runs/' in source
+    assert "tee -a \"$LOG\"" in source
+    assert "LOG_ALREADY_EXISTS_REFUSING_OVERWRITE" not in source
+    assert "OUTPUT_DIR_ALREADY_EXISTS_REFUSING_OVERWRITE" in source
 
 
 def test_success_report_schema_requires_real_update_fields():

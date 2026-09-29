@@ -9,6 +9,9 @@ from typing import Any
 from training.runtime import append_metrics
 
 
+SFT_ATTENTION_BACKEND = "sdpa"
+
+
 @dataclass(frozen=True)
 class SFTConfigSpec:
     output_dir: Path

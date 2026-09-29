@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from training.eval import load_task_ids
-from training.sft import SFTConfigSpec, build_sft_trainer, train_sft
+from training.sft import SFT_ATTENTION_BACKEND, SFTConfigSpec, build_sft_trainer, train_sft
 from training.sft_data import load_selected_examples, tokenize_with_assistant_mask
 from training.runtime import json_hash, load_config, model_metadata, prepare_run, sha256_file
 
@@ -85,8 +85,9 @@ def main(argv=None) -> int:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True, local_files_only=True)
     dataset = Dataset.from_list([tokenize_with_assistant_mask(tokenizer, example.messages, max_length=spec.max_length)
                                  for example in examples])
-    model = AutoModelForCausalLM.from_pretrained(config["model_path"], torch_dtype=torch.bfloat16,
-                                               local_files_only=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        config["model_path"], dtype=torch.bfloat16,
+        attn_implementation=SFT_ATTENTION_BACKEND, local_files_only=True)
     trainer = build_sft_trainer(model=model, tokenizer=tokenizer, train_dataset=dataset, config=spec)
     train_sft(trainer, resume_from_checkpoint=resume)
     tokenizer.save_pretrained(str(root / "checkpoints" / "final"))

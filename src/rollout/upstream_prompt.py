@@ -14,6 +14,8 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .prompt import sanitize_persona
+
 
 class UpstreamPromptError(ValueError):
     """上游 prompt block 缺失、歧义或格式不受支持。"""
@@ -90,6 +92,5 @@ def persona_visible_text(persona: Mapping[str, Any]) -> str:
     leaked = forbidden.intersection(persona.keys())
     if leaked:
         raise UpstreamPromptError("persona contains evaluator-only fields: " + ", ".join(sorted(leaked)))
-    visible = {key: value for key, value in persona.items() if key != "__reasoning__"}
+    visible = sanitize_persona({key: value for key, value in persona.items() if key != "__reasoning__"})
     return "\n用户的个人文档是：" + json.dumps(visible, ensure_ascii=False)
-

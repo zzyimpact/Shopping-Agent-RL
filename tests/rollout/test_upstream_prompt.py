@@ -37,13 +37,13 @@ def test_extract_rejects_folded_or_ambiguous_blocks(tmp_path: Path):
 
 
 def test_persona_visible_text_uses_official_phrase_and_strips_reasoning():
-    text = persona_visible_text({"偏好": "蓝", "__reasoning__": "private"})
+    text = persona_visible_text({"偏好": "蓝", "用户ID": "U123", "__reasoning__": "private"})
     assert text.startswith("\n用户的个人文档是：")
     assert "private" not in text
+    assert "U123" not in text
     assert '"偏好": "蓝"' in text
 
 
 def test_persona_visible_text_rejects_evaluator_fields():
     with pytest.raises(UpstreamPromptError, match="evaluator-only"):
         persona_visible_text({"target_asin": "secret-target"})
-
